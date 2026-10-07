@@ -46,3 +46,10 @@ fn line_of_sight_is_exact_at_the_crest() {
     assert!(ridge(100).line_of_sight(left, right));
     assert!(!ridge(101).line_of_sight(left, right));
 }
+
+#[test]
+fn heightmap_hash_is_its_canonical_json() {
+    let mut expected = rts_core::hash::CanonHasher::new();
+    expected.raw(r#"{"corners":[0,0,7,0,0,0,0,7,0,0],"height":1,"width":4}"#);
+    assert_eq!(rts_core::hash::hash_of(&ridge(7)).value(), expected.value());
+}

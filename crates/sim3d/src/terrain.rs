@@ -2,6 +2,7 @@
 //! interpolation, so the ground is continuous and every sample is exact and repeatable.
 
 use crate::space::{SUB, Vec3};
+use rts_core::hash::{Canon, CanonHasher};
 
 /// Terrain heights at the `(width + 1) * (height + 1)` corners of a `width` by `height` grid of cells.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,5 +63,11 @@ impl Heightmap {
             let p = from.lerp(to, i, steps);
             self.sample(p.x, p.y) <= p.z
         })
+    }
+}
+
+impl Canon for Heightmap {
+    fn canon(&self, w: &mut CanonHasher) {
+        w.object().array("corners", &self.corners).field("height", &self.height).field("width", &self.width).end();
     }
 }

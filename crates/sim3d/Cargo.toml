@@ -5,3 +5,6 @@ description = "The 3D simulation: fixed-point positions in continuous space, hei
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+rts-core = { git = "https://github.com/EdwardAThomson/rts-core", rev = "da80e8730d22dcd6f34194787e168b565982af4c" }
