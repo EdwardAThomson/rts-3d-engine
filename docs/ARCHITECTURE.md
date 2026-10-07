@@ -29,8 +29,25 @@ units per side; measurements decide whether we go further.
 | later: movement polish | Closest-reachable fallback for unreachable goals, facing and turn rates, formations. | Planned |
 | `sim3d` | `weapon` (weapons from data; projectiles with a closed-form flight, straight for direct fire or a parabola for lobbed shots) and combat in `world`: unit types with health, `Attack` orders that close in until in range and in sight, shots stopped by the first hill or unit in the way, two-band splash, scatter from the seeded generator, a fixed combat order so mutual kills both land, owners, idle units picking the nearest enemy they can hit, half splash on their own side, and armour classes with each weapon's damage percent against each (0 = cannot hurt, never auto-picked), and `AttackMove` orders that halt to fight enemies met on the way and then drive on. | Started |
 | later: combat | Turrets and facing, homing at aircraft, wrecks, faster unit lookups for many projectiles. | Planned |
-| later: economy | Flow economy as a switchable module. | Planned |
-| later: renderer | wgpu, native and WebGPU, reading only `events` and snapshots, with strategic zoom from day one. | Planned |
+| `sim3d` | `replay`: seekable replays. Recording plays the game once and keeps a copy of the world every N ticks; seeking starts from the nearest copy and plays forward. The world a seek returns takes new commands (take over from replay), and its log is itself a replay. Snapshots live in memory for now. | Started |
+| `sim3d` | `economy` (docs/economy.md): a flow economy with resource kinds from data, a store per player with a capacity, units that produce every tick, and factories with queues that pay as they build. When spending outruns income, all of a player's factories slow down together. | Started |
+| `sim3d` | Construction in `world/construction.rs`: builders place frames beside a site once it is clear and build them through the economy, other builders assist, and structures' footprints block ground movement (not aircraft) until destroyed. | Started |
+| later: economy | Resource spots and extractors, assisting factories, wrecks and reclaim, build priorities, rally points. | Planned |
+| later: renderer | wgpu, native and WebGPU, reading only `events` and snapshots, with strategic zoom from day one, on the platform layer shared with the Classic engine. | Planned |
+
+## Roadmap
+
+Agreed with Ed on 7 Oct 2026; the order can change as we learn.
+
+1. Done: terrain, movement and steering, combat with armour classes, attack-move, seekable replays with take-over.
+2. Economy and building: flow economy, factories, builders and structures (started), then resource spots and
+   wrecks.
+3. A simple AI and headless self-play runs for balance numbers.
+4. Intent orders: factory targets, fall-back rules, patrols that react.
+5. Renderer: wgpu with strategic zoom, on the platform layer shared with the Classic engine (window, input, GPU
+   setup, textures, text, audio), which starts in `rts-engine` and moves to its own crate when this engine needs
+   it.
+6. Polish: turrets and facing, formations, a high-ground range bonus, craters, saving games to disk.
 
 ## Decisions so far
 

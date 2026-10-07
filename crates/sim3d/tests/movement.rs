@@ -1,5 +1,6 @@
 use rts_core::hash::hash_of;
 use rts_core::rng::{random_int, seed_state};
+use sim3d::economy::Production;
 use sim3d::movement::MoveClass;
 use sim3d::space::SUB;
 use sim3d::terrain::Heightmap;
@@ -16,6 +17,8 @@ fn classes() -> Vec<UnitType> {
             height: 64,
             weapon: None,
             armour: 0,
+            production: Production::default(),
+            structure: None,
         },
         UnitType {
             movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: 64 },
@@ -23,6 +26,8 @@ fn classes() -> Vec<UnitType> {
             height: 64,
             weapon: None,
             armour: 0,
+            production: Production::default(),
+            structure: None,
         },
     ]
 }
