@@ -15,6 +15,10 @@
 //! push never takes a unit off the map or onto ground its class cannot cross. A group sent to one point packs
 //! round it: a unit whose move is not over arrives when it touches a unit already resting at the same goal and
 //! is within the space such a crowd needs.
+//!
+//! Armed units fight on their own: idle ones, and ones on an attack-move, look for an enemy every few ticks. A
+//! unit on an attack-move halts while it has such a target and drives on when the target is gone.
+//!
 //! The push-apart idea is the separation rule of Reynolds' boids ("Steering Behaviors For Autonomous
 //! Characters", 1999); the code is our own.
 
@@ -39,6 +43,9 @@ pub enum Command {
     /// Attack another unit: close in until it is in range and in sight, then fire whenever reloaded, until it
     /// is destroyed or another order is given.
     Attack { unit: u32, target: u32 },
+    /// Go to a point like `Move`, but stop to fight any enemy met on the way: an armed unit halts to fire at an
+    /// enemy it can hurt in range and in sight, and drives on once that enemy is gone or out of reach.
+    AttackMove { unit: u32, x: i32, y: i32 },
 }
 
 /// Why a move ended.
@@ -120,6 +127,8 @@ pub struct Unit {
     pub chase: bool,
     /// Ticks until its weapon has reloaded.
     pub cooldown: i32,
+    /// Whether its current move is an attack-move, so it stops to fight enemies met on the way.
+    pub hunt: bool,
 }
 
 impl Canon for Unit {
@@ -131,6 +140,7 @@ impl Canon for Unit {
             .field("cooldown", &self.cooldown)
             .opt("goal", goal.as_ref())
             .field("health", &self.health)
+            .opt("hunt", self.hunt.then_some(&true))
             .field("id", &self.id)
             .field("kind", &(self.kind as u32))
             .field("owner", &self.owner)
@@ -237,6 +247,7 @@ impl World {
             target: None,
             chase: false,
             cooldown: 0,
+            hunt: false,
         });
         id
     }
@@ -260,10 +271,14 @@ impl World {
         let mut ended = Vec::new();
         for (i, unit) in self.units.iter_mut().enumerate() {
             if let Some(goal) = unit.goal {
+                if unit.hunt && unit.target.is_some() {
+                    // Halted on an attack-move to fight an enemy in range and in sight.
+                    continue;
+                }
                 let class = &self.types[unit.kind].movement;
                 let field = &self.fields[&(unit.kind, cell_of(&self.map, goal))];
                 if let Some(reason) = advance(&self.map, class, field, unit, goal) {
-                    unit.goal = None;
+                    (unit.goal, unit.hunt) = (None, false);
                     unit.rest = (reason == MoveEnd::Arrived).then_some(goal);
                     ended.push((i, reason));
                 }
@@ -303,7 +318,10 @@ impl World {
                 unit.target = None;
                 continue;
             };
-            if unit.target.is_none() && unit.goal.is_none() && (self.tick + unit.id).is_multiple_of(SCAN_EVERY) {
+            if unit.target.is_none()
+                && (unit.goal.is_none() || unit.hunt)
+                && (self.tick + unit.id).is_multiple_of(SCAN_EVERY)
+            {
                 let found = self.acquire(i, &weapon);
                 let unit = &mut self.units[i];
                 (unit.target, unit.chase) = (found, false);
@@ -348,8 +366,10 @@ impl World {
                 continue;
             }
             let me = &mut self.units[i];
-            me.goal = None;
-            me.rest = None;
+            if !me.hunt {
+                me.goal = None;
+                me.rest = None;
+            }
             if me.cooldown > 0 {
                 continue;
             }
@@ -639,7 +659,7 @@ impl World {
                         * (2 * isqrt(crowd as u64) as i64 + 1);
                     let (dx, dy) = (i64::from(self.units[m].pos.x - goal.0), i64::from(self.units[m].pos.y - goal.1));
                     if dx * dx + dy * dy <= reach * reach {
-                        self.units[m].goal = None;
+                        (self.units[m].goal, self.units[m].hunt) = (None, false);
                         self.units[m].rest = Some(goal);
                         *resting.entry(goal).or_default() += 1;
                         ended.push((m, MoveEnd::Arrived));
@@ -655,13 +675,20 @@ impl World {
         match command {
             Command::Move { unit, x, y } => {
                 let Some(i) = self.index_of(unit) else { return };
-                (self.units[i].target, self.units[i].chase) = (None, false);
+                let u = &mut self.units[i];
+                (u.target, u.chase, u.hunt) = (None, false, false);
+                self.set_goal(i, x, y);
+            }
+            Command::AttackMove { unit, x, y } => {
+                let Some(i) = self.index_of(unit) else { return };
+                let u = &mut self.units[i];
+                (u.target, u.chase, u.hunt) = (None, false, true);
                 self.set_goal(i, x, y);
             }
             Command::Stop { unit } => {
                 if let Some(i) = self.index_of(unit) {
                     let u = &mut self.units[i];
-                    (u.goal, u.rest, u.target, u.chase) = (None, None, None, false);
+                    (u.goal, u.rest, u.target, u.chase, u.hunt) = (None, None, None, false, false);
                 }
             }
             Command::Attack { unit, target } => {
@@ -669,7 +696,8 @@ impl World {
                     && unit != target
                     && self.types[self.units[i].kind].weapon.is_some()
                 {
-                    (self.units[i].target, self.units[i].chase) = (Some(target), true);
+                    let u = &mut self.units[i];
+                    (u.target, u.chase, u.hunt) = (Some(target), true, false);
                 }
             }
         }
