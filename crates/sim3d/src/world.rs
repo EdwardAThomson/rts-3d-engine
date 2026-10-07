@@ -2,7 +2,8 @@
 //!
 //! A tick runs in a fixed order: commands; then combat (every armed unit with a target fires or closes in, in
 //! id order; every projectile flies, in id order; damage is applied in the order it was dealt; the dead are
-//! removed in id order); then movement. Everyone fires before anyone is hurt, so two units that kill each other
+//! removed in id order); then movement; then the economy (income, then factories pay for and build their items,
+//! see `economy`). Everyone fires before anyone is hurt, so two units that kill each other
 //! on the same tick both get their shot, whichever has the lower id. This follows the combat tick in
 //! plans/rts/rules-combat.md.
 //!
@@ -22,6 +23,7 @@
 //! The push-apart idea is the separation rule of Reynolds' boids ("Steering Behaviors For Autonomous
 //! Characters", 1999); the code is our own.
 
+use crate::economy::{Job, Production, Store, affordable, paid};
 use crate::movement::{FlowField, MoveClass, can_step};
 use crate::space::{SUB, Vec3};
 use crate::terrain::Heightmap;
@@ -46,6 +48,11 @@ pub enum Command {
     /// Go to a point like `Move`, but stop to fight any enemy met on the way: an armed unit halts to fire at an
     /// enemy it can hurt in range and in sight, and drives on once that enemy is gone or out of reach.
     AttackMove { unit: u32, x: i32, y: i32 },
+    /// Add a unit type to the end of a factory's queue; with `repeat` it is queued again each time it is built.
+    /// Ignored unless the factory can build that type.
+    Produce { unit: u32, kind: usize, repeat: bool },
+    /// Empty a factory's queue. What was already paid towards the item in progress is lost.
+    ClearQueue { unit: u32 },
 }
 
 /// Why a move ended.
@@ -91,6 +98,11 @@ pub enum Event {
         by: u32,
         at: Vec3,
     },
+    /// A factory finished a unit.
+    Built {
+        factory: u32,
+        unit: u32,
+    },
 }
 
 /// A kind of unit, read from data.
@@ -104,6 +116,8 @@ pub struct UnitType {
     pub weapon: Option<Weapon>,
     /// Armour class, an index into every weapon's `against` list.
     pub armour: usize,
+    /// What it costs, builds and produces.
+    pub production: Production,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +143,10 @@ pub struct Unit {
     pub cooldown: i32,
     /// Whether its current move is an attack-move, so it stops to fight enemies met on the way.
     pub hunt: bool,
+    /// What it is producing, first item first.
+    pub queue: Vec<Job>,
+    /// Build work done on the first item in the queue.
+    pub work: i64,
 }
 
 impl Canon for Unit {
@@ -145,8 +163,10 @@ impl Canon for Unit {
             .field("kind", &(self.kind as u32))
             .field("owner", &self.owner)
             .field("pos", &self.pos)
+            .opt("queue", (!self.queue.is_empty()).then_some(&self.queue))
             .opt("rest", rest.as_ref())
             .opt("target", self.target.as_ref())
+            .opt("work", (self.work != 0).then_some(&self.work))
             .end();
     }
 }
@@ -160,6 +180,8 @@ pub struct World {
     /// In id order. Projectiles take ids from the same counter as units.
     projectiles: Vec<Projectile>,
     next_id: u32,
+    /// Each player's resources, in owner order. A player with no store has nothing to spend.
+    stores: Vec<Store>,
     /// The game's one random generator (scatter).
     rng: i32,
     tick: u32,
@@ -178,6 +200,12 @@ impl World {
             assert!((0..100).contains(&class.climb_slowdown), "climb slowdown is a percent below 100");
             assert!((1..=SUB / 2).contains(&class.radius), "a unit's radius is from 1 to half a cell");
             assert!(t.max_health > 0 && t.height >= 0, "a unit has health and a height");
+            let p = &t.production;
+            assert!(p.build_power >= 0 && p.build_time >= 0, "no negative build values");
+            assert!(p.cost.iter().chain(&p.produces).all(|&v| v >= 0), "no negative costs or income");
+            for &kind in &p.builds {
+                assert!(kind < types.len() && types[kind].production.build_time > 0, "a buildable type takes time");
+            }
             if let Some(w) = &t.weapon {
                 assert!(w.range > 0 && w.reload > 0 && w.speed > 0, "a weapon has range, reload and speed");
                 assert!(
@@ -192,6 +220,7 @@ impl World {
             units: Vec::new(),
             projectiles: Vec::new(),
             next_id: 1,
+            stores: Vec::new(),
             rng: seed_state(seed),
             tick: 0,
             commands: CommandQueue::default(),
@@ -217,6 +246,23 @@ impl World {
 
     pub fn unit(&self, id: u32) -> Option<&Unit> {
         self.units.binary_search_by_key(&id, |u| u.id).ok().map(|i| &self.units[i])
+    }
+
+    /// A player's resources, if they have a store.
+    pub fn store(&self, owner: u8) -> Option<&Store> {
+        self.stores.iter().find(|s| s.owner == owner)
+    }
+
+    /// Give a player a store holding `amount` of each resource, up to `capacity`. Part of setting up a game,
+    /// before the first tick.
+    pub fn set_store(&mut self, owner: u8, amount: Vec<i64>, capacity: Vec<i64>) {
+        assert!(amount.len() == capacity.len(), "one amount and one capacity per resource");
+        let amount = amount.iter().zip(&capacity).map(|(&a, &c)| a.min(c)).collect();
+        let store = Store { owner, amount, capacity, rate: 100 };
+        match self.stores.binary_search_by_key(&owner, |s| s.owner) {
+            Ok(i) => self.stores[i] = store,
+            Err(i) => self.stores.insert(i, store),
+        }
     }
 
     pub fn command_log(&self) -> &[Logged<Command>] {
@@ -248,6 +294,8 @@ impl World {
             chase: false,
             cooldown: 0,
             hunt: false,
+            queue: Vec::new(),
+            work: 0,
         });
         id
     }
@@ -286,11 +334,12 @@ impl World {
         }
         self.separate();
         self.arrive_by_contact(&mut ended);
-        self.tick += 1;
         events.extend(ended.into_iter().map(|(i, reason)| {
             let u = &self.units[i];
             Event::MoveEnded { unit: u.id, reason, x: u.pos.x, y: u.pos.y }
         }));
+        self.economy(&mut events);
+        self.tick += 1;
         events
     }
 
@@ -671,6 +720,95 @@ impl World {
         ended.sort_unstable_by_key(|&(i, _)| i);
     }
 
+    /// Income, then building. Every unit adds what it produces to its owner's store, and the store is capped.
+    /// Then every factory asks for what a full tick of work on its first item would cost. Where a player's store
+    /// cannot cover all of their factories' requests for some resource, all of them work at the same lower
+    /// rate: the lowest share of what was asked that the store can pay, over all resources. Factories are then
+    /// paid in id order, each never taking more than is left. Finished units appear beside the factory.
+    fn economy(&mut self, events: &mut Vec<Event>) {
+        for u in &self.units {
+            let produces = &self.types[u.kind].production.produces;
+            if let Ok(s) = self.stores.binary_search_by_key(&u.owner, |s| s.owner) {
+                for (amount, &add) in self.stores[s].amount.iter_mut().zip(produces) {
+                    *amount += add;
+                }
+            }
+        }
+        let mut asked = vec![Vec::new(); self.stores.len()];
+        for (s, store) in self.stores.iter_mut().enumerate() {
+            for (amount, &cap) in store.amount.iter_mut().zip(&store.capacity) {
+                *amount = (*amount).min(cap);
+            }
+            asked[s] = vec![0i64; store.amount.len()];
+        }
+        let job = |u: &Unit| -> Option<(&Production, i64, &Production)> {
+            let head = u.queue.first()?;
+            let me = &self.types[u.kind].production;
+            (me.build_power > 0).then(|| (me, me.build_power, &self.types[head.kind].production))
+        };
+        for u in &self.units {
+            let (Some((_, power, item)), Ok(s)) = (job(u), self.stores.binary_search_by_key(&u.owner, |s| s.owner))
+            else {
+                continue;
+            };
+            let to = (u.work + power).min(item.build_time);
+            for (r, ask) in asked[s].iter_mut().enumerate() {
+                let cost = item.cost_of(r);
+                *ask += paid(cost, to, item.build_time) - paid(cost, u.work, item.build_time);
+            }
+        }
+        for (store, asked) in self.stores.iter_mut().zip(&asked) {
+            store.rate = store
+                .amount
+                .iter()
+                .zip(asked)
+                .filter(|&(_, &ask)| ask > 0)
+                .map(|(&have, &ask)| (have * 100 / ask).min(100))
+                .min()
+                .unwrap_or(100);
+        }
+        let mut finished = Vec::new();
+        for i in 0..self.units.len() {
+            let u = &self.units[i];
+            let Some((_, power, item)) = job(u) else { continue };
+            let store = self.stores.binary_search_by_key(&u.owner, |s| s.owner).ok();
+            let (rate, have) = match store {
+                Some(s) => (self.stores[s].rate, self.stores[s].amount.clone()),
+                // Nothing to spend, so only things that cost nothing get built.
+                None => (100, Vec::new()),
+            };
+            let time = item.build_time;
+            let mut to = (u.work + power * rate / 100).min(time);
+            for r in 0..item.cost.len() {
+                let budget = have.get(r).copied().unwrap_or(0);
+                to = to.min(affordable(item.cost_of(r), u.work, time, budget));
+            }
+            if let Some(s) = store {
+                for (r, amount) in self.stores[s].amount.iter_mut().enumerate() {
+                    let cost = item.cost_of(r);
+                    *amount -= paid(cost, to, time) - paid(cost, u.work, time);
+                }
+            }
+            let u = &mut self.units[i];
+            u.work = to;
+            if to == time {
+                let job = u.queue.remove(0);
+                u.work = 0;
+                if job.repeat {
+                    u.queue.push(job.clone());
+                }
+                finished.push((i, job.kind));
+            }
+        }
+        for (i, kind) in finished {
+            let f = &self.units[i];
+            let gap = self.types[f.kind].movement.radius + self.types[kind].movement.radius + CONTACT;
+            let (factory, owner, x, y) = (f.id, f.owner, f.pos.x, f.pos.y + gap);
+            let unit = self.spawn_for(owner, kind, x, y);
+            events.push(Event::Built { factory, unit });
+        }
+    }
+
     fn apply(&mut self, command: Command) {
         match command {
             Command::Move { unit, x, y } => {
@@ -689,6 +827,18 @@ impl World {
                 if let Some(i) = self.index_of(unit) {
                     let u = &mut self.units[i];
                     (u.goal, u.rest, u.target, u.chase, u.hunt) = (None, None, None, false, false);
+                }
+            }
+            Command::Produce { unit, kind, repeat } => {
+                if let Some(i) = self.index_of(unit)
+                    && self.types[self.units[i].kind].production.builds.contains(&kind)
+                {
+                    self.units[i].queue.push(Job { kind, repeat });
+                }
+            }
+            Command::ClearQueue { unit } => {
+                if let Some(i) = self.index_of(unit) {
+                    (self.units[i].queue, self.units[i].work) = (Vec::new(), 0);
                 }
             }
             Command::Attack { unit, target } => {
@@ -717,6 +867,7 @@ impl Canon for World {
             .field("nextId", &self.next_id)
             .array("projectiles", &self.projectiles)
             .field("rng", &self.rng)
+            .opt("stores", (!self.stores.is_empty()).then_some(&self.stores))
             .field("tick", &self.tick)
             .array("units", &self.units)
             .end();

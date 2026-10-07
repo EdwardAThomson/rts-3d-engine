@@ -1,4 +1,5 @@
 use rts_core::hash::hash_of;
+use sim3d::economy::Production;
 use sim3d::movement::MoveClass;
 use sim3d::space::{SUB, Vec3};
 use sim3d::terrain::Heightmap;
@@ -17,7 +18,14 @@ fn tracked(radius: i32) -> MoveClass {
 }
 
 fn armed(max_health: i32, weapon: Weapon) -> UnitType {
-    UnitType { movement: tracked(64), max_health, height: 48, weapon: Some(weapon), armour: 0 }
+    UnitType {
+        movement: tracked(64),
+        max_health,
+        height: 48,
+        weapon: Some(weapon),
+        armour: 0,
+        production: Production::default(),
+    }
 }
 
 fn cannon() -> Weapon {
@@ -33,8 +41,22 @@ fn types() -> Vec<UnitType> {
         armed(100, cannon()),
         armed(80, mortar(4)),
         armed(80, mortar(1)),
-        UnitType { movement: tracked(64), max_health: 100, height: 48, weapon: None, armour: 0 },
-        UnitType { movement: tracked(16), max_health: 100, height: 48, weapon: None, armour: 0 },
+        UnitType {
+            movement: tracked(64),
+            max_health: 100,
+            height: 48,
+            weapon: None,
+            armour: 0,
+            production: Production::default(),
+        },
+        UnitType {
+            movement: tracked(16),
+            max_health: 100,
+            height: 48,
+            weapon: None,
+            armour: 0,
+            production: Production::default(),
+        },
         armed(25, cannon()),
     ]
 }
@@ -378,6 +400,7 @@ fn armoured() -> Vec<UnitType> {
         height: 48,
         weapon: None,
         armour,
+        production: Production::default(),
     };
     vec![armed(100, gun), target(LIGHT, 0), target(HEAVY, 0), target(AIRFRAME, 0)]
 }

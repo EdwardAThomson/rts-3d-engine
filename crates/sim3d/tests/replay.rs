@@ -1,5 +1,6 @@
 use rts_core::hash::hash_of;
 use rts_core::rng::{random_int, seed_state};
+use sim3d::economy::Production;
 use sim3d::movement::MoveClass;
 use sim3d::replay::Replay;
 use sim3d::space::SUB;
@@ -25,8 +26,22 @@ fn types() -> Vec<UnitType> {
         against: vec![],
     };
     vec![
-        UnitType { movement: tracked.clone(), max_health: 120, height: 48, weapon: Some(gun), armour: 0 },
-        UnitType { movement: tracked, max_health: 80, height: 48, weapon: Some(lob), armour: 0 },
+        UnitType {
+            movement: tracked.clone(),
+            max_health: 120,
+            height: 48,
+            weapon: Some(gun),
+            armour: 0,
+            production: Production::default(),
+        },
+        UnitType {
+            movement: tracked,
+            max_health: 80,
+            height: 48,
+            weapon: Some(lob),
+            armour: 0,
+            production: Production::default(),
+        },
     ]
 }
 

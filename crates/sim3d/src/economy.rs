@@ -1,0 +1,109 @@
+//! The flow economy (docs/economy.md): resources are rates, not lump sums. Things are paid for while they are
+//! built, a little each tick, and when spending outruns income every spender of that player slows down together
+//! instead of anything being refused. The idea is Total Annihilation's; the rules and code are our own.
+//!
+//! Every amount is an integer in milli-units of a resource, so a rate of half a unit a tick is 500. How many
+//! resources there are, and what each is called, comes from the setting; the engine only counts them.
+
+use rts_core::hash::{Canon, CanonHasher};
+
+/// What a unit type costs, builds and produces, read from data. The default is a unit that costs nothing,
+/// builds nothing and produces nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Production {
+    /// The cost of building one, per resource. A resource past the end of the list costs nothing.
+    pub cost: Vec<i64>,
+    /// The build work one takes. A builder adds its build power to it every tick.
+    pub build_time: i64,
+    /// The build work this unit adds each tick to whatever it is building.
+    pub build_power: i64,
+    /// The unit types this unit can produce, by index.
+    pub builds: Vec<usize>,
+    /// What this unit adds to its owner's store every tick, per resource.
+    pub produces: Vec<i64>,
+}
+
+impl Production {
+    pub fn cost_of(&self, resource: usize) -> i64 {
+        self.cost.get(resource).copied().unwrap_or(0)
+    }
+}
+
+/// A player's resources.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Store {
+    pub owner: u8,
+    /// What the player has, per resource.
+    pub amount: Vec<i64>,
+    /// The most the player can hold, per resource. Income beyond it is lost.
+    pub capacity: Vec<i64>,
+    /// The percent of full speed the player's builders ran at last tick: 100 unless spending outran the store.
+    pub rate: i64,
+}
+
+impl Canon for Store {
+    fn canon(&self, w: &mut CanonHasher) {
+        w.object()
+            .field("amount", &self.amount)
+            .field("capacity", &self.capacity)
+            .field("owner", &self.owner)
+            .field("rate", &self.rate)
+            .end();
+    }
+}
+
+/// One item in a factory's queue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Job {
+    /// The unit type to build.
+    pub kind: usize,
+    /// Whether to queue it again once it is built.
+    pub repeat: bool,
+}
+
+impl Canon for Job {
+    fn canon(&self, w: &mut CanonHasher) {
+        w.object().field("kind", &(self.kind as u32)).field("repeat", &self.repeat).end();
+    }
+}
+
+/// How much of a resource costing `cost` has been paid once `work` of `time` is done. Paying this way, and
+/// never by summing rounded steps, means an item always costs exactly its cost.
+pub fn paid(cost: i64, work: i64, time: i64) -> i64 {
+    cost * work / time
+}
+
+/// The most work, starting from `work`, that `budget` more of a resource costing `cost` pays for.
+pub fn affordable(cost: i64, work: i64, time: i64, budget: i64) -> i64 {
+    if cost == 0 {
+        return time;
+    }
+    // The largest w with cost * w / time <= paid + budget.
+    ((paid(cost, work, time) + budget + 1) * time - 1) / cost
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paying_by_work_done_always_adds_up_to_the_cost() {
+        let (cost, time) = (1000, 7);
+        let mut total = 0;
+        for work in 0..time {
+            total += paid(cost, work + 1, time) - paid(cost, work, time);
+        }
+        assert_eq!(total, cost);
+    }
+
+    #[test]
+    fn affordable_work_is_the_most_a_budget_pays_for() {
+        let (cost, time) = (1000, 7);
+        for budget in 0..400 {
+            let w = affordable(cost, 2, time, budget);
+            assert!(paid(cost, w, time) - paid(cost, 2, time) <= budget);
+            assert!(paid(cost, w + 1, time) - paid(cost, 2, time) > budget);
+        }
+        assert_eq!(affordable(0, 3, time, 0), time, "free things never wait");
+    }
+}

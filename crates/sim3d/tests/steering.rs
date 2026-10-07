@@ -1,3 +1,4 @@
+use sim3d::economy::Production;
 use sim3d::movement::MoveClass;
 use sim3d::space::{SUB, Vec3};
 use sim3d::terrain::Heightmap;
@@ -15,6 +16,7 @@ fn classes() -> Vec<UnitType> {
             height: 64,
             weapon: None,
             armour: 0,
+            production: Production::default(),
         },
         UnitType {
             movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: RADIUS },
@@ -22,6 +24,7 @@ fn classes() -> Vec<UnitType> {
             height: 64,
             weapon: None,
             armour: 0,
+            production: Production::default(),
         },
     ]
 }

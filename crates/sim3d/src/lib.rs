@@ -5,6 +5,7 @@
 
 #![deny(clippy::float_arithmetic, clippy::disallowed_types)]
 
+pub mod economy;
 pub mod movement;
 pub mod replay;
 pub mod space;
