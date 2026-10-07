@@ -109,8 +109,13 @@ pub struct Unit {
     /// heading there stop when they touch it.
     pub rest: Option<(i32, i32)>,
     pub health: i32,
+    /// The player it belongs to. Units attack the units of any other owner they see on their own.
+    pub owner: u8,
     /// The unit it is attacking.
     pub target: Option<u32>,
+    /// Whether it was ordered to attack, and so closes in, or picked the target itself and only fires while it
+    /// can.
+    pub chase: bool,
     /// Ticks until its weapon has reloaded.
     pub cooldown: i32,
 }
@@ -120,11 +125,13 @@ impl Canon for Unit {
         let goal = self.goal.map(|(x, y)| vec![x, y]);
         let rest = self.rest.map(|(x, y)| vec![x, y]);
         w.object()
+            .field("chase", &self.chase)
             .field("cooldown", &self.cooldown)
             .opt("goal", goal.as_ref())
             .field("health", &self.health)
             .field("id", &self.id)
             .field("kind", &(self.kind as u32))
+            .field("owner", &self.owner)
             .field("pos", &self.pos)
             .opt("rest", rest.as_ref())
             .opt("target", self.target.as_ref())
@@ -204,8 +211,13 @@ impl World {
         self.commands.log()
     }
 
-    /// Place a new unit of type `kind` on the ground at `(x, y)` and return its id.
+    /// Place a new unit of type `kind`, owned by player 0, on the ground at `(x, y)` and return its id.
     pub fn spawn(&mut self, kind: usize, x: i32, y: i32) -> u32 {
+        self.spawn_for(0, kind, x, y)
+    }
+
+    /// Place a new unit of type `kind`, owned by `owner`, on the ground at `(x, y)` and return its id.
+    pub fn spawn_for(&mut self, owner: u8, kind: usize, x: i32, y: i32) -> u32 {
         let (x, y) = self.onto_map(x, y);
         let id = self.next_id;
         self.next_id += 1;
@@ -219,7 +231,9 @@ impl World {
             goal: None,
             rest: None,
             health,
+            owner,
             target: None,
+            chase: false,
             cooldown: 0,
         });
         id
@@ -283,26 +297,34 @@ impl World {
         for i in 0..self.units.len() {
             let unit = &mut self.units[i];
             unit.cooldown = (unit.cooldown - 1).max(0);
-            let Some(target) = unit.target else { continue };
             let Some(weapon) = self.types[unit.kind].weapon.clone() else {
                 unit.target = None;
                 continue;
             };
+            if unit.target.is_none() && unit.goal.is_none() && (self.tick + unit.id).is_multiple_of(SCAN_EVERY) {
+                let found = self.acquire(i, &weapon);
+                let unit = &mut self.units[i];
+                (unit.target, unit.chase) = (found, false);
+            }
+            let unit = &self.units[i];
+            let Some(target) = unit.target else { continue };
             let Some(t) = self.index_of(target) else {
                 // The target is gone: the attack is over, and so is any chase.
                 let unit = &mut self.units[i];
-                unit.target = None;
-                unit.goal = None;
+                if unit.chase {
+                    unit.goal = None;
+                }
+                (unit.target, unit.chase) = (None, false);
                 continue;
             };
+            let (muzzle, middle, in_range, in_sight) = self.aim(i, t, &weapon);
             let (me, them) = (&self.units[i], &self.units[t]);
-            let muzzle = Vec3::new(me.pos.x, me.pos.y, me.pos.z + self.types[me.kind].height);
-            let middle = Vec3::new(them.pos.x, them.pos.y, them.pos.z + self.types[them.kind].height / 2);
-            let in_range = i64::from(muzzle.ground_distance(middle)) <= i64::from(weapon.range);
-            // Direct fire needs a clear line to the target's middle, judged by flying the shot through the
-            // terrain exactly as it will fly. Lobbed shots are fired regardless and may hit a hill.
-            let in_sight =
-                weapon.gravity > 0 || self.clear_shot(&Projectile::launch(0, me.id, me.kind, &weapon, muzzle, middle));
+            if !(in_range && in_sight) && !me.chase {
+                // A target picked by the unit itself is dropped once it slips out of range or sight; only an
+                // ordered attack gives chase.
+                self.units[i].target = None;
+                continue;
+            }
             if !(in_range && in_sight) {
                 // Close in, re-aiming the chase whenever the target moves to another cell. If the target cannot be
                 // reached, hold and keep watching rather than ordering a hopeless move every tick.
@@ -330,13 +352,47 @@ impl World {
                 continue;
             }
             me.cooldown = weapon.reload;
-            let (shooter, kind) = (me.id, me.kind);
+            let (shooter, owner, kind) = (me.id, me.owner, me.kind);
             let aim = self.scatter(middle, weapon.scatter);
             let id = self.next_id;
             self.next_id += 1;
-            self.projectiles.push(Projectile::launch(id, shooter, kind, &weapon, muzzle, aim));
+            self.projectiles.push(Projectile::launch(id, (shooter, owner), kind, &weapon, muzzle, aim));
             events.push(Event::Fired { unit: shooter, projectile: id, from: muzzle, aim });
         }
+    }
+
+    /// Where unit `i` would fire from and aim at to hit unit `t`, and whether the target is in range and in
+    /// sight. Direct fire needs a clear line to the target's middle, judged by flying the shot through the
+    /// terrain exactly as it will fly; lobbed shots are fired regardless and may hit a hill.
+    fn aim(&self, i: usize, t: usize, weapon: &Weapon) -> (Vec3, Vec3, bool, bool) {
+        let (me, them) = (&self.units[i], &self.units[t]);
+        let muzzle = Vec3::new(me.pos.x, me.pos.y, me.pos.z + self.types[me.kind].height);
+        let middle = Vec3::new(them.pos.x, them.pos.y, them.pos.z + self.types[them.kind].height / 2);
+        let in_range = i64::from(muzzle.ground_distance(middle)) <= i64::from(weapon.range);
+        let in_sight = in_range
+            && (weapon.gravity > 0
+                || self.clear_shot(&Projectile::launch(0, (me.id, me.owner), me.kind, weapon, muzzle, middle)));
+        (muzzle, middle, in_range, in_sight)
+    }
+
+    /// The enemy an idle unit picks for itself: the nearest unit of another owner that is in range and, for
+    /// direct fire, in sight, ties going to the lower id. Only the nearest few in range are tried for sight.
+    fn acquire(&self, i: usize, weapon: &Weapon) -> Option<u32> {
+        let me = &self.units[i];
+        let reach = i64::from(weapon.range);
+        let mut near: Vec<(i64, u32, usize)> = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.owner != me.owner)
+            .filter_map(|(t, u)| {
+                let (dx, dy) = (i64::from(u.pos.x - me.pos.x), i64::from(u.pos.y - me.pos.y));
+                let d2 = dx * dx + dy * dy;
+                (d2 <= reach * reach).then_some((d2, u.id, t))
+            })
+            .collect();
+        near.sort_unstable();
+        near.into_iter().take(SIGHT_TRIES).find(|&(_, _, t)| self.aim(i, t, weapon).3).map(|(_, id, _)| id)
     }
 
     /// The aim point moved by a random offset within `radius` on the ground. Offsets are drawn in a square and
@@ -410,7 +466,8 @@ impl World {
     }
 
     /// The damage a projectile bursting at `at` deals: full to a unit it struck, then full to units whose
-    /// centre is within half its splash and half to those within all of it, never to its firer. Splash reaches
+    /// centre is within half its splash and half to those within all of it, never to its firer. The firer's own
+    /// side takes `FRIENDLY_SPLASH_PERCENT` of splash, so supporting fire is risky but not ruinous. Splash reaches
     /// units whose middle is within the splash distance above or below the burst, so a shell bursting on the
     /// ground does not hurt aircraft overhead.
     fn blast(&self, p: &Projectile, at: Vec3, struck: Option<u32>, damage: &mut Vec<Hurt>) {
@@ -432,7 +489,10 @@ impl World {
             if i64::from(middle - at.z).abs() > splash || d2 > splash * splash {
                 continue;
             }
-            let amount = if 4 * d2 <= splash * splash { weapon.damage } else { weapon.damage / 2 };
+            let mut amount = if 4 * d2 <= splash * splash { weapon.damage } else { weapon.damage / 2 };
+            if u.owner == p.owner {
+                amount = amount * FRIENDLY_SPLASH_PERCENT / 100;
+            }
             damage.push(Hurt { unit: u.id, by: p.firer, amount });
         }
     }
@@ -591,13 +651,13 @@ impl World {
         match command {
             Command::Move { unit, x, y } => {
                 let Some(i) = self.index_of(unit) else { return };
-                self.units[i].target = None;
+                (self.units[i].target, self.units[i].chase) = (None, false);
                 self.set_goal(i, x, y);
             }
             Command::Stop { unit } => {
                 if let Some(i) = self.index_of(unit) {
                     let u = &mut self.units[i];
-                    (u.goal, u.rest, u.target) = (None, None, None);
+                    (u.goal, u.rest, u.target, u.chase) = (None, None, None, false);
                 }
             }
             Command::Attack { unit, target } => {
@@ -605,7 +665,7 @@ impl World {
                     && unit != target
                     && self.types[self.units[i].kind].weapon.is_some()
                 {
-                    self.units[i].target = Some(target);
+                    (self.units[i].target, self.units[i].chase) = (Some(target), true);
                 }
             }
         }
@@ -637,6 +697,15 @@ struct Hurt {
     by: u32,
     amount: i32,
 }
+
+/// The share of splash damage a unit takes from its own side's shots, in percent.
+const FRIENDLY_SPLASH_PERCENT: i32 = 50;
+
+/// Idle armed units look for an enemy once every this many ticks, staggered by id.
+const SCAN_EVERY: u32 = 8;
+
+/// How many of the nearest enemies in range an idle unit tests for a clear shot when picking a target.
+const SIGHT_TRIES: usize = 4;
 
 /// What a projectile meets on one stretch of its flight.
 enum Contact {

@@ -206,7 +206,7 @@ fn a_replay_of_the_command_log_matches_tick_for_tick() {
     }
 
     // The golden hash pins today's movement rules. If a change moves it, say so and update it on purpose.
-    assert_eq!(hash_of(&live).hex(), "d71ad108");
+    assert_eq!(hash_of(&live).hex(), "1159a708");
 }
 
 /// The move endings among a tick's events.

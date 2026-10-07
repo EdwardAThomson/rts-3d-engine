@@ -35,8 +35,9 @@ pub struct Weapon {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Projectile {
     pub id: u32,
-    /// The unit that fired it, which it never hits.
+    /// The unit that fired it, which it never hits, and that unit's owner.
     pub firer: u32,
+    pub owner: u8,
     /// The firer's unit type, whose weapon this is.
     pub kind: usize,
     pub from: Vec3,
@@ -52,7 +53,7 @@ pub struct Projectile {
 impl Projectile {
     /// A projectile leaving `from` towards `aim` with this weapon's speed and gravity, its climb chosen so it
     /// comes down exactly on the aim point.
-    pub fn launch(id: u32, firer: u32, kind: usize, weapon: &Weapon, from: Vec3, aim: Vec3) -> Self {
+    pub fn launch(id: u32, (firer, owner): (u32, u8), kind: usize, weapon: &Weapon, from: Vec3, aim: Vec3) -> Self {
         let distance = i64::from(from.ground_distance(aim));
         let speed = i64::from(weapon.speed.max(1));
         let flight = ((distance + speed - 1) / speed).max(1);
@@ -62,6 +63,7 @@ impl Projectile {
         Self {
             id,
             firer,
+            owner,
             kind,
             from,
             aim,
@@ -98,6 +100,7 @@ impl Canon for Projectile {
             .field("gravity", &self.gravity)
             .field("id", &self.id)
             .field("kind", &(self.kind as u32))
+            .field("owner", &self.owner)
             .end();
     }
 }
@@ -114,7 +117,7 @@ mod tests {
     fn a_lobbed_shot_rises_and_lands_exactly_on_the_aim_point() {
         let from = Vec3::new(0, 0, 10);
         let aim = Vec3::new(1000, 0, 50);
-        let p = Projectile::launch(1, 1, 0, &shell(2), from, aim);
+        let p = Projectile::launch(1, (1, 0), 0, &shell(2), from, aim);
         assert_eq!(p.flight, 16, "1000 at 64 a tick, rounded up");
         assert_eq!(p.at(0), from);
         assert_eq!(p.at(16), aim);
@@ -130,7 +133,7 @@ mod tests {
     fn direct_fire_flies_in_a_straight_line() {
         let from = Vec3::new(0, 0, 0);
         let aim = Vec3::new(640, 0, 100);
-        let p = Projectile::launch(1, 1, 0, &shell(0), from, aim);
+        let p = Projectile::launch(1, (1, 0), 0, &shell(0), from, aim);
         assert_eq!(p.flight, 10);
         for t in 0..=10 {
             assert_eq!(p.at(t), Vec3::new(64 * t, 0, 10 * t));
@@ -139,7 +142,7 @@ mod tests {
 
     #[test]
     fn a_point_blank_shot_still_takes_one_tick() {
-        let p = Projectile::launch(1, 1, 0, &shell(3), Vec3::new(5, 5, 5), Vec3::new(5, 5, 0));
+        let p = Projectile::launch(1, (1, 0), 0, &shell(3), Vec3::new(5, 5, 5), Vec3::new(5, 5, 0));
         assert_eq!((p.flight, p.at(1)), (1, Vec3::new(5, 5, 0)));
     }
 }

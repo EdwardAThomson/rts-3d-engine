@@ -153,10 +153,10 @@ fn splash_hurts_close_units_fully_and_farther_ones_by_half() {
     let mut world = World::new(Heightmap::flat(12, 5, 0), types(), 1);
     let mortar = spawn(&mut world, HIGH_LOB, centre(1, 2));
     let (tx, ty) = centre(8, 2);
-    let target = spawn(&mut world, SMALL, (tx, ty));
-    let near = spawn(&mut world, SMALL, (tx, ty + 64));
-    let far = spawn(&mut world, SMALL, (tx, ty - 160));
-    let away = spawn(&mut world, SMALL, (tx + 300, ty));
+    let target = world.spawn_for(1, SMALL, tx, ty);
+    let near = world.spawn_for(1, SMALL, tx, ty + 64);
+    let far = world.spawn_for(1, SMALL, tx, ty - 160);
+    let away = world.spawn_for(1, SMALL, tx + 300, ty);
     world.command(Command::Attack { unit: mortar, target });
     let events = run(&mut world, 60);
     let first_impact = events.iter().position(|(_, e)| matches!(e, Event::Impact { .. })).unwrap();
@@ -241,15 +241,83 @@ fn scatter_moves_the_aim_point_within_its_radius_and_follows_the_seed() {
     assert_ne!(a, shots(2));
 }
 
+#[test]
+fn own_side_splash_does_half_damage() {
+    let mut world = World::new(Heightmap::flat(12, 5, 0), types(), 1);
+    let mortar = spawn(&mut world, HIGH_LOB, centre(1, 2));
+    let (tx, ty) = centre(8, 2);
+    let target = world.spawn_for(1, SMALL, tx, ty);
+    let friend = spawn(&mut world, SMALL, (tx, ty + 64));
+    world.command(Command::Attack { unit: mortar, target });
+    run(&mut world, 40);
+    assert_eq!(world.unit(friend).unwrap().health, 100 - 15, "half of the full-band 30");
+}
+
+#[test]
+fn idle_units_open_fire_on_enemies_in_range_by_themselves() {
+    let mut world = World::new(Heightmap::flat(12, 5, 0), types(), 1);
+    let ours = spawn(&mut world, TANK, centre(1, 2));
+    let friend = spawn(&mut world, TARGET, centre(3, 2 - 1));
+    let near = world.spawn_for(1, TARGET, centre(6, 2).0, centre(6, 2).1);
+    let far = world.spawn_for(1, TARGET, centre(10, 2).0, centre(10, 2).1);
+    let events = run(&mut world, 200);
+    let targets: Vec<u32> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::Damaged { unit, .. } => Some(*unit),
+            _ => None,
+        })
+        .collect();
+    assert!(!targets.contains(&friend), "never its own side");
+    assert!(!targets.contains(&far), "never beyond its range of 8 cells");
+    assert_eq!(targets.len(), 4, "the nearer enemy, four shots to destroy");
+    assert!(world.unit(near).is_none());
+    assert!(world.unit(far).is_some());
+    let u = world.unit(ours).unwrap();
+    assert_eq!((u.target, u.goal), (None, None), "it does not go after the far one");
+}
+
+#[test]
+fn a_self_picked_target_is_dropped_when_it_drives_out_of_range() {
+    let mut t = types();
+    t[TARGET].max_health = 10_000;
+    let mut world = World::new(Heightmap::flat(24, 5, 0), t, 1);
+    let ours = spawn(&mut world, TANK, centre(1, 2));
+    let (ex, ey) = centre(8, 2);
+    let enemy = world.spawn_for(1, TARGET, ex, ey);
+    run(&mut world, 20);
+    assert_eq!(world.unit(ours).unwrap().target, Some(enemy), "it picked the enemy");
+    world.command(Command::Move { unit: enemy, x: centre(22, 2).0, y: ey });
+    run(&mut world, 200);
+    let u = world.unit(ours).unwrap();
+    assert_eq!((u.target, u.goal), (None, None), "it let the enemy go and stayed put");
+    assert_eq!((u.pos.x, u.pos.y), centre(1, 2));
+}
+
+#[test]
+fn direct_fire_picks_the_nearest_enemy_it_can_actually_hit() {
+    // The tank stands on the near slope of a ridge. One enemy is just over the crest, closer but hidden; the
+    // other is farther back on open ground.
+    let mut world = World::new(ridge(300), types(), 1);
+    let ours = spawn(&mut world, TANK, centre(3, 1));
+    let (hx, hy) = (4 * SUB + SUB / 2, centre(3, 1).1);
+    let hidden = world.spawn_for(1, TARGET, hx, hy);
+    let (ox, oy) = centre(0, 1);
+    let open = world.spawn_for(1, TARGET, ox, oy);
+    run(&mut world, 9);
+    assert_eq!(world.unit(ours).unwrap().target, Some(open));
+    assert_eq!(world.unit(hidden).unwrap().health, 100);
+}
+
 /// Two squads on a ridge map trading fire, with orders at different ticks.
 fn battle() -> World {
     let mut world = World::new(ridge(120), types(), 9);
     spawn(&mut world, TANK, centre(0, 0));
     spawn(&mut world, HIGH_LOB, centre(0, 1));
     spawn(&mut world, TANK, centre(1, 2));
-    spawn(&mut world, TANK, centre(7, 0));
-    spawn(&mut world, LOW_LOB, centre(7, 1));
-    spawn(&mut world, TARGET, centre(6, 2));
+    for (kind, (x, y)) in [(TANK, centre(7, 0)), (LOW_LOB, centre(7, 1)), (TARGET, centre(6, 2))] {
+        world.spawn_for(1, kind, x, y);
+    }
     world
 }
 
@@ -293,5 +361,5 @@ fn a_replay_of_a_battle_matches_tick_for_tick() {
         assert_eq!(hash_of(&replay).value(), *expected, "replay diverged at tick {i}");
     }
     // The golden hash pins today's combat rules. If a change moves it, say so and update it on purpose.
-    assert_eq!(hash_of(&live).hex(), "d048bd55");
+    assert_eq!(hash_of(&live).hex(), "b1d932fd");
 }
