@@ -29,6 +29,29 @@ pub struct Weapon {
     pub splash: i32,
     /// Random aim error: the aim point moves by up to this ground distance, drawn from the game's generator.
     pub scatter: i32,
+    /// Percent of `damage` dealt to each armour class, by class index; a class past the end takes 100%. 0
+    /// means the weapon cannot hurt that class at all, and units never pick such a target themselves. Armour
+    /// classes come from data; the engine never assumes which exist.
+    pub against: Vec<i32>,
+}
+
+impl Weapon {
+    /// Percent of damage dealt to armour class `armour`.
+    pub fn percent_against(&self, armour: usize) -> i32 {
+        self.against.get(armour).copied().unwrap_or(100)
+    }
+
+    /// Damage dealt to a unit of armour class `armour`: `band` is 100 for a direct hit or the inner splash band
+    /// and 50 for the outer band, `side` is 100, or the friendly-splash percent on the firer's own side. One
+    /// division, last; anything the weapon can hurt at all takes at least 1.
+    pub fn damage_to(&self, armour: usize, band: i32, side: i32) -> i32 {
+        let percent = self.percent_against(armour);
+        if percent == 0 || band == 0 || side == 0 || self.damage == 0 {
+            return 0;
+        }
+        let product = i64::from(self.damage) * i64::from(percent) * i64::from(band) * i64::from(side);
+        (product / 1_000_000).max(1) as i32
+    }
 }
 
 /// A projectile in flight.
@@ -110,7 +133,7 @@ mod tests {
     use super::*;
 
     fn shell(gravity: i32) -> Weapon {
-        Weapon { range: 2048, reload: 30, speed: 64, gravity, damage: 40, splash: 0, scatter: 0 }
+        Weapon { range: 2048, reload: 30, speed: 64, gravity, damage: 40, splash: 0, scatter: 0, against: vec![] }
     }
 
     #[test]
@@ -127,6 +150,18 @@ mod tests {
         assert_eq!(p.at(8).x, 500);
         assert_eq!(p.at(32).x, 2000);
         assert!(p.at(17).z < 50, "past the aim point it keeps falling");
+    }
+
+    #[test]
+    fn damage_follows_armour_band_and_side_with_one_division() {
+        let w = Weapon { against: vec![100, 60, 0], ..shell(0) };
+        assert_eq!(w.damage_to(0, 100, 100), 40);
+        assert_eq!(w.damage_to(1, 100, 100), 24);
+        assert_eq!(w.damage_to(1, 50, 50), 6, "40 * 60 * 50 * 50 / 1000000");
+        assert_eq!(w.damage_to(2, 100, 100), 0, "cannot hurt this armour at all");
+        assert_eq!(w.damage_to(7, 100, 100), 40, "classes past the list take full damage");
+        let weak = Weapon { damage: 1, ..w };
+        assert_eq!(weak.damage_to(1, 50, 50), 1, "never rounds a real hit down to nothing");
     }
 
     #[test]

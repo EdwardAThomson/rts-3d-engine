@@ -17,15 +17,15 @@ fn tracked(radius: i32) -> MoveClass {
 }
 
 fn armed(max_health: i32, weapon: Weapon) -> UnitType {
-    UnitType { movement: tracked(64), max_health, height: 48, weapon: Some(weapon) }
+    UnitType { movement: tracked(64), max_health, height: 48, weapon: Some(weapon), armour: 0 }
 }
 
 fn cannon() -> Weapon {
-    Weapon { range: 2048, reload: 10, speed: 128, gravity: 0, damage: 25, splash: 0, scatter: 0 }
+    Weapon { range: 2048, reload: 10, speed: 128, gravity: 0, damage: 25, splash: 0, scatter: 0, against: vec![] }
 }
 
 fn mortar(gravity: i32) -> Weapon {
-    Weapon { range: 2048, reload: 20, speed: 48, gravity, damage: 30, splash: 192, scatter: 0 }
+    Weapon { range: 2048, reload: 20, speed: 48, gravity, damage: 30, splash: 192, scatter: 0, against: vec![] }
 }
 
 fn types() -> Vec<UnitType> {
@@ -33,8 +33,8 @@ fn types() -> Vec<UnitType> {
         armed(100, cannon()),
         armed(80, mortar(4)),
         armed(80, mortar(1)),
-        UnitType { movement: tracked(64), max_health: 100, height: 48, weapon: None },
-        UnitType { movement: tracked(16), max_health: 100, height: 48, weapon: None },
+        UnitType { movement: tracked(64), max_health: 100, height: 48, weapon: None, armour: 0 },
+        UnitType { movement: tracked(16), max_health: 100, height: 48, weapon: None, armour: 0 },
         armed(25, cannon()),
     ]
 }
@@ -362,4 +362,50 @@ fn a_replay_of_a_battle_matches_tick_for_tick() {
     }
     // The golden hash pins today's combat rules. If a change moves it, say so and update it on purpose.
     assert_eq!(hash_of(&live).hex(), "b1d932fd");
+}
+
+const LIGHT: usize = 0;
+const HEAVY: usize = 1;
+const AIRFRAME: usize = 2;
+
+/// A cannon that does full damage to light armour, 40% to heavy and nothing to aircraft, and three targets,
+/// one of each armour class.
+fn armoured() -> Vec<UnitType> {
+    let gun = Weapon { against: vec![100, 40, 0], ..cannon() };
+    let target = |armour, altitude| UnitType {
+        movement: MoveClass { altitude, ..tracked(64) },
+        max_health: 100,
+        height: 48,
+        weapon: None,
+        armour,
+    };
+    vec![armed(100, gun), target(LIGHT, 0), target(HEAVY, 0), target(AIRFRAME, 0)]
+}
+
+#[test]
+fn armour_scales_the_damage_a_weapon_deals() {
+    let mut world = World::new(Heightmap::flat(8, 8, 0), armoured(), 1);
+    let gun = spawn(&mut world, 0, centre(1, 1));
+    let light = world.spawn_for(1, 1, centre(5, 1).0, centre(5, 1).1);
+    let heavy = world.spawn_for(1, 2, centre(1, 5).0, centre(1, 5).1);
+    world.command(Command::Attack { unit: gun, target: light });
+    run(&mut world, 9);
+    world.command(Command::Attack { unit: gun, target: heavy });
+    run(&mut world, 20);
+    assert_eq!(world.unit(light).unwrap().health, 75, "full 25 against light armour");
+    assert_eq!(world.unit(heavy).unwrap().health, 80, "two shots of 10: 40% of 25 against heavy armour");
+}
+
+#[test]
+fn units_never_pick_a_target_their_weapon_cannot_hurt() {
+    let mut world = World::new(Heightmap::flat(12, 5, 0), armoured(), 1);
+    let gun = spawn(&mut world, 0, centre(1, 2));
+    let immune = world.spawn_for(1, 3, centre(3, 2).0, centre(3, 2).1);
+    let heavy = world.spawn_for(1, 2, centre(8, 2).0, centre(8, 2).1);
+    run(&mut world, 9);
+    assert_eq!(world.unit(gun).unwrap().target, Some(heavy), "the nearer enemy is immune, so it takes the far one");
+    // Even an ordered attack on it does nothing.
+    world.command(Command::Attack { unit: gun, target: immune });
+    run(&mut world, 60);
+    assert_eq!(world.unit(immune).unwrap().health, 100);
 }

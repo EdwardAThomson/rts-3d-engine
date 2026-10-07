@@ -15,12 +15,14 @@ fn classes() -> Vec<UnitType> {
             max_health: 100,
             height: 64,
             weapon: None,
+            armour: 0,
         },
         UnitType {
             movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: 64 },
             max_health: 100,
             height: 64,
             weapon: None,
+            armour: 0,
         },
     ]
 }
