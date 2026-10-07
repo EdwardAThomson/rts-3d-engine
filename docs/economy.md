@@ -16,8 +16,9 @@ empty, everything that spends slows down together and the game says so. Nothing 
    two). Amounts are integers in milli-units, so a rate of 0.5 a tick is 500.
 2. **Each player has a store per resource**, with a capacity. Income above capacity is lost. The store also
    reports the rate its builders ran at last tick, so the UI can say when the player is short.
-3. **Producers.** A unit type may produce a fixed amount of each resource every tick (a generator, an extractor
-   on a resource spot). Extractors only produce while standing on a resource spot from the map. Later: upkeep.
+3. **Producers.** A unit type may produce a fixed amount of each resource every tick (a generator). Resource
+   spots are part of the map, each yielding a rate of one resource; a finished extractor yields every spot under
+   its footprint on top of its own income. Frames produce nothing. Later: upkeep.
 4. **Build power.** A unit type may have build power, the build time it adds each tick to whatever it is
    building. An item's cost and build time come from data; each tick, building at power `p` spends
    `cost * p / build_time` of each resource. What has been paid is always `cost * work / build_time` of the work
@@ -34,11 +35,15 @@ empty, everything that spends slows down together and the game says so. Nothing 
    cell. The frame's health grows with the work done, on top of any damage it takes, and it does nothing (no
    income, no fire) until finished. Any builder that can build that type can assist a frame of its own side,
    adding its power. A builder that cannot reach its site gives up. A frame no one builds stays. Later: assisting
-   factories, reclaiming frames and wrecks, and moving idle units off a site.
+   factories, reclaiming frames, and moving idle units off a site.
 8. **Structures** are units that never move. Their footprint, whole cells centred on the structure, blocks ground
    movement (flow fields and pushes go round it, and diagonal moves cannot squeeze past a corner) but not
    aircraft, and stops blocking when the structure is destroyed. Projectiles strike anywhere over the footprint.
    A site must be on the map, clear of other structures, and flat enough for the type's `max_rise`.
+9. **Wrecks.** A finished unit whose type has a wreck worth leaves a wreck when destroyed; a frame leaves
+   nothing. A builder next to a wreck reclaims it with its build power, gaining its worth the way building pays
+   (exact in total), over half the type's build time. The wreck is gone once all of it is reclaimed. Income from
+   reclaiming is capped by the store like any other. Later: reclaiming frames, wrecks that block or burn out.
 
 ## Order of work
 
@@ -46,4 +51,5 @@ empty, everything that spends slows down together and the game says so. Nothing 
    `sim3d::economy` and `Command::Produce`/`ClearQueue` in `world`. Extractors wait for resource spots.
 2. Builders, frames, assisting and structure footprints (rules 7 and 8). Built: `Command::Build`/`Assist` and
    `world/construction.rs`.
-3. Resource spots on the map and extractors; wrecks and reclaim.
+3. Resource spots on the map and extractors; wrecks and reclaim (rules 3 and 9). Built: `World::add_spot`,
+   `Production::extracts` and `wreck`, `Command::Reclaim`.

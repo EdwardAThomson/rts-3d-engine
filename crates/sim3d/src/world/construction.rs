@@ -35,7 +35,7 @@ impl World {
     }
 
     /// The cells a structure of type `kind` centred at `(x, y)` covers, as `[x0, x1) x [y0, y1)`.
-    fn footprint_cells(&self, kind: usize, x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+    pub(super) fn footprint_cells(&self, kind: usize, x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
         let s = self.types[kind].structure?;
         let (x0, y0) = ((x - s.width * SUB / 2).div_euclid(SUB), (y - s.depth * SUB / 2).div_euclid(SUB));
         Some((x0, y0, x0 + s.width, y0 + s.depth))
@@ -138,6 +138,7 @@ impl World {
         }
         let u = &mut self.units[i];
         (u.target, u.chase, u.hunt, u.assist, u.goal) = (None, false, false, None, None);
+        u.reclaim = None;
         u.plan = Some((kind, cx, cy));
     }
 
@@ -149,7 +150,30 @@ impl World {
         }
         let u = &mut self.units[i];
         (u.target, u.chase, u.hunt, u.plan, u.goal) = (None, false, false, None, None);
+        u.reclaim = None;
         u.assist = Some(target);
+    }
+
+    pub(super) fn order_reclaim(&mut self, unit: u32, wreck: u32) {
+        let Some(i) = self.index_of(unit) else { return };
+        let u = &self.units[i];
+        if u.build.is_some() || self.types[u.kind].production.build_power == 0 || self.wreck_index(wreck).is_none() {
+            return;
+        }
+        let u = &mut self.units[i];
+        (u.target, u.chase, u.hunt, u.plan, u.assist, u.goal) = (None, false, false, None, None, None);
+        u.reclaim = Some(wreck);
+    }
+
+    fn wreck_index(&self, id: u32) -> Option<usize> {
+        self.wrecks.binary_search_by_key(&id, |w| w.id).ok()
+    }
+
+    /// Whether builder `i` is close enough to reclaim wreck `w`.
+    pub(super) fn near_wreck(&self, i: usize, w: usize) -> bool {
+        let (me, wreck) = (&self.units[i], &self.wrecks[w]);
+        let reach = i64::from(self.types[me.kind].movement.radius + BUILD_REACH);
+        i64::from(me.pos.ground_distance(wreck.pos)) <= reach
     }
 
     /// Every builder, in id order, works towards its plan or the frame it assists: it goes next to the site,
@@ -158,6 +182,17 @@ impl World {
         for i in 0..self.units.len() {
             if let Some((kind, cx, cy)) = self.units[i].plan {
                 self.follow_plan(i, kind, cx, cy, events);
+            } else if let Some(id) = self.units[i].reclaim {
+                match self.wreck_index(id) {
+                    None => self.units[i].reclaim = None,
+                    Some(w) if self.near_wreck(i, w) => self.units[i].goal = None,
+                    Some(w) => {
+                        if self.units[i].goal.is_none() {
+                            let p = self.wrecks[w].pos;
+                            self.set_goal(i, p.x, p.y);
+                        }
+                    }
+                }
             } else if let Some(target) = self.units[i].assist {
                 match self.index_of(target).filter(|&t| self.units[t].build.is_some()) {
                     None => self.units[i].assist = None,
