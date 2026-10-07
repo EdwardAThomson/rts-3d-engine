@@ -10,8 +10,8 @@ const AIR: usize = 1;
 
 fn classes() -> Vec<MoveClass> {
     vec![
-        MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0 },
-        MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300 },
+        MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64 },
+        MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: 64 },
     ]
 }
 
@@ -196,5 +196,5 @@ fn a_replay_of_the_command_log_matches_tick_for_tick() {
     }
 
     // The golden hash pins today's movement rules. If a change moves it, say so and update it on purpose.
-    assert_eq!(hash_of(&live).hex(), "7a672a75");
+    assert_eq!(hash_of(&live).hex(), "1a52899a");
 }

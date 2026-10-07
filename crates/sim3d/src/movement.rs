@@ -30,8 +30,12 @@ pub struct MoveClass {
     /// Percent of speed lost when climbing at `max_slope`; gentler climbs lose proportionally less and going
     /// downhill costs nothing. Ignored when `max_slope` is `None`. Must be below 100.
     pub climb_slowdown: i32,
-    /// Height kept above the ground: 0 for ground units, more for aircraft.
+    /// Height kept above the ground: 0 for ground units, more for aircraft. Units on the ground and units in
+    /// the air never push each other.
     pub altitude: i32,
+    /// Units are discs of this radius, in sub-cell units, and keep apart from other units in their layer. At
+    /// most half a cell.
+    pub radius: i32,
 }
 
 impl MoveClass {
@@ -82,12 +86,22 @@ fn centre_heights(map: &Heightmap) -> Vec<i32> {
 /// diagonal step also needs both cells it squeezes between to be crossable from `a`, so units never cut a
 /// corner of a cliff.
 fn step_cost(size: (i32, i32), heights: &[i32], class: &MoveClass, a: (i32, i32), b: (i32, i32)) -> Option<u32> {
+    step_cost_by(size, |(x, y)| heights[(y * size.0 + x) as usize], class, a, b)
+}
+
+/// `step_cost` with the cell-centre heights given by a function, for callers without a table of them.
+fn step_cost_by(
+    size: (i32, i32),
+    h: impl Fn((i32, i32)) -> i32,
+    class: &MoveClass,
+    a: (i32, i32),
+    b: (i32, i32),
+) -> Option<u32> {
     let (w, hgt) = size;
     let inside = |(x, y): (i32, i32)| (0..w).contains(&x) && (0..hgt).contains(&y);
     if !inside(a) || !inside(b) {
         return None;
     }
-    let h = |(x, y): (i32, i32)| heights[(y * w + x) as usize];
     let diagonal = a.0 != b.0 && a.1 != b.1;
     if diagonal {
         for side in [(b.0, a.1), (a.0, b.1)] {
@@ -102,6 +116,18 @@ fn step_cost(size: (i32, i32), heights: &[i32], class: &MoveClass, a: (i32, i32)
         return None;
     }
     Some((run * 100 / class.speed_percent(rise, run)) as u32)
+}
+
+/// Whether `class` may move from cell `a` into cell `b`, which is the same cell or one of its eight neighbours,
+/// by the same rules the flow fields use.
+pub fn can_step(map: &Heightmap, class: &MoveClass, a: (i32, i32), b: (i32, i32)) -> bool {
+    if a == b {
+        return true;
+    }
+    let h = |(cx, cy): (i32, i32)| map.sample(cx * SUB + SUB / 2, cy * SUB + SUB / 2);
+    (a.0 - b.0).abs() <= 1
+        && (a.1 - b.1).abs() <= 1
+        && step_cost_by((map.width(), map.height()), h, class, a, b).is_some()
 }
 
 impl FlowField {
@@ -181,7 +207,7 @@ mod tests {
     use rts_core::imath::isqrt;
 
     fn tracked() -> MoveClass {
-        MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0 }
+        MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64 }
     }
 
     #[test]
