@@ -12,16 +12,6 @@ jobs:
       - uses: actions/checkout@v4
       # rust-toolchain.toml pins the compiler, clippy, rustfmt and the WebAssembly target.
       - run: rustup show active-toolchain || rustup toolchain install
-      # rts-core is a private repository. RTS_CORE_TOKEN is a fine-grained token with read access to its contents.
-      - name: Give git read access to rts-core
-        env:
-          RTS_CORE_TOKEN: ${{ secrets.RTS_CORE_TOKEN }}
-        run: |
-          if [ -n "$RTS_CORE_TOKEN" ]; then
-            git config --global url."https://x-access-token:${RTS_CORE_TOKEN}@github.com/EdwardAThomson/rts-core".insteadOf "https://github.com/EdwardAThomson/rts-core"
-          else
-            echo "::warning::RTS_CORE_TOKEN is not set; fetching rts-core only works if that repository is public."
-          fi
       - uses: actions/cache@v4
         with:
           path: |
