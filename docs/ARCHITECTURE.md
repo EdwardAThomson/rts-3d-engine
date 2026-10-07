@@ -17,7 +17,8 @@ units per side; measurements decide whether we go further.
 | `rts-engine` | The Classic RTS Engine (2D tiles). |
 | `rts-3d-engine` (this one) | Everything that needs continuous 3D space. |
 
-`sim3d` will depend on `rts-core` once the shared crate moves there from `rts-engine`.
+`sim3d` depends on `rts-core` by git revision. rts-core is private, so local builds use your git credentials
+(`.cargo/config.toml`) and CI needs an `RTS_CORE_TOKEN` secret with read access to it, unless rts-core is made public.
 
 ## Crates
 

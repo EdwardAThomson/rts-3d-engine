@@ -1,0 +1,4 @@
+# rts-core is a private repository: fetch it with the git command line, so Cargo uses the same credentials as
+# git (your own locally; a token in CI, see .github/workflows/ci.yml).
+[net]
+git-fetch-with-cli = true
