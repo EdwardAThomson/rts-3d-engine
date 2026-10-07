@@ -95,6 +95,8 @@ pub struct UnitType {
     /// cylinder of this height and the movement radius, leave from its top and aim at its middle.
     pub height: i32,
     pub weapon: Option<Weapon>,
+    /// Armour class, an index into every weapon's `against` list.
+    pub armour: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,8 +377,8 @@ impl World {
         (muzzle, middle, in_range, in_sight)
     }
 
-    /// The enemy an idle unit picks for itself: the nearest unit of another owner that is in range and, for
-    /// direct fire, in sight, ties going to the lower id. Only the nearest few in range are tried for sight.
+    /// The enemy an idle unit picks for itself: the nearest unit of another owner that its weapon can hurt and
+    /// that is in range and, for direct fire, in sight, ties going to the lower id. Only the nearest few in range are tried for sight.
     fn acquire(&self, i: usize, weapon: &Weapon) -> Option<u32> {
         let me = &self.units[i];
         let reach = i64::from(weapon.range);
@@ -384,7 +386,7 @@ impl World {
             .units
             .iter()
             .enumerate()
-            .filter(|(_, u)| u.owner != me.owner)
+            .filter(|(_, u)| u.owner != me.owner && weapon.percent_against(self.types[u.kind].armour) > 0)
             .filter_map(|(t, u)| {
                 let (dx, dy) = (i64::from(u.pos.x - me.pos.x), i64::from(u.pos.y - me.pos.y));
                 let d2 = dx * dx + dy * dy;
@@ -472,8 +474,11 @@ impl World {
     /// ground does not hurt aircraft overhead.
     fn blast(&self, p: &Projectile, at: Vec3, struck: Option<u32>, damage: &mut Vec<Hurt>) {
         let Some(weapon) = &self.types[p.kind].weapon else { return };
-        if let Some(id) = struck {
-            damage.push(Hurt { unit: id, by: p.firer, amount: weapon.damage });
+        if let Some(id) = struck
+            && let Some(t) = self.index_of(id)
+        {
+            let amount = weapon.damage_to(self.types[self.units[t].kind].armour, 100, 100);
+            damage.push(Hurt { unit: id, by: p.firer, amount });
         }
         let splash = i64::from(weapon.splash);
         if splash == 0 {
@@ -489,10 +494,9 @@ impl World {
             if i64::from(middle - at.z).abs() > splash || d2 > splash * splash {
                 continue;
             }
-            let mut amount = if 4 * d2 <= splash * splash { weapon.damage } else { weapon.damage / 2 };
-            if u.owner == p.owner {
-                amount = amount * FRIENDLY_SPLASH_PERCENT / 100;
-            }
+            let band = if 4 * d2 <= splash * splash { 100 } else { 50 };
+            let side = if u.owner == p.owner { FRIENDLY_SPLASH_PERCENT } else { 100 };
+            let amount = weapon.damage_to(self.types[u.kind].armour, band, side);
             damage.push(Hurt { unit: u.id, by: p.firer, amount });
         }
     }
