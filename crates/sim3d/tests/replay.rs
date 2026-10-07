@@ -33,6 +33,7 @@ fn types() -> Vec<UnitType> {
             weapon: Some(gun),
             armour: 0,
             production: Production::default(),
+            structure: None,
         },
         UnitType {
             movement: tracked,
@@ -41,6 +42,7 @@ fn types() -> Vec<UnitType> {
             weapon: Some(lob),
             armour: 0,
             production: Production::default(),
+            structure: None,
         },
     ]
 }

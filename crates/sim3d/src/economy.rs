@@ -29,6 +29,17 @@ impl Production {
     }
 }
 
+/// What makes a unit type a structure: it never moves, and its footprint, a rectangle of whole cells centred on
+/// its position, blocks ground movement. Read from data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Structure {
+    /// Footprint size in cells, east-west and north-south.
+    pub width: i32,
+    pub depth: i32,
+    /// The greatest difference between the heights of the footprint's corners on which it can be placed.
+    pub max_rise: i32,
+}
+
 /// A player's resources.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Store {

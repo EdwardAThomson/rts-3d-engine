@@ -31,7 +31,8 @@ units per side; measurements decide whether we go further.
 | later: combat | Turrets and facing, homing at aircraft, wrecks, faster unit lookups for many projectiles. | Planned |
 | `sim3d` | `replay`: seekable replays. Recording plays the game once and keeps a copy of the world every N ticks; seeking starts from the nearest copy and plays forward. The world a seek returns takes new commands (take over from replay), and its log is itself a replay. Snapshots live in memory for now. | Started |
 | `sim3d` | `economy` (docs/economy.md): a flow economy with resource kinds from data, a store per player with a capacity, units that produce every tick, and factories with queues that pay as they build. When spending outruns income, all of a player's factories slow down together. | Started |
-| later: economy | Builders, construction frames and assisting, structures whose footprints block movement, resource spots and extractors, wrecks and reclaim. | Planned |
+| `sim3d` | Construction in `world/construction.rs`: builders place frames beside a site once it is clear and build them through the economy, other builders assist, and structures' footprints block ground movement (not aircraft) until destroyed. | Started |
+| later: economy | Resource spots and extractors, assisting factories, wrecks and reclaim, build priorities, rally points. | Planned |
 | later: renderer | wgpu, native and WebGPU, reading only `events` and snapshots, with strategic zoom from day one, on the platform layer shared with the Classic engine. | Planned |
 
 ## Roadmap
@@ -39,7 +40,7 @@ units per side; measurements decide whether we go further.
 Agreed with Ed on 7 Oct 2026; the order can change as we learn.
 
 1. Done: terrain, movement and steering, combat with armour classes, attack-move, seekable replays with take-over.
-2. Economy and building: flow economy and factories (started), then builders, structures, resource spots and
+2. Economy and building: flow economy, factories, builders and structures (started), then resource spots and
    wrecks.
 3. A simple AI and headless self-play runs for balance numbers.
 4. Intent orders: factory targets, fall-back rules, patrols that react.

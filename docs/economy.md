@@ -29,15 +29,21 @@ empty, everything that spends slows down together and the game says so. Nothing 
    priorities.
 6. **Factories** are units with build power, a list of what they can build, and a queue (repeat optional). The
    finished unit appears beside the factory. Later: rally points and exits that face a way.
-7. **Construction.** A builder ordered to build a structure drives to the site, places a frame (a unit at 1 health
-   and 0% progress), and builds it. Health grows with progress. Any builder can assist any frame or factory
-   job of its own side, adding its power. A frame no one builds stays. Reclaiming frames and wrecks comes later.
-8. **Structures** are units that do not move. Their footprint blocks ground movement, so flow fields treat it as
-   impassable.
+7. **Construction.** A builder ordered to build a structure drives to a free cell beside the site, waits until no
+   ground unit stands on it, places a frame (a unit at 1 health and no work done) and builds it from within one
+   cell. The frame's health grows with the work done, on top of any damage it takes, and it does nothing (no
+   income, no fire) until finished. Any builder that can build that type can assist a frame of its own side,
+   adding its power. A builder that cannot reach its site gives up. A frame no one builds stays. Later: assisting
+   factories, reclaiming frames and wrecks, and moving idle units off a site.
+8. **Structures** are units that never move. Their footprint, whole cells centred on the structure, blocks ground
+   movement (flow fields and pushes go round it, and diagonal moves cannot squeeze past a corner) but not
+   aircraft, and stops blocking when the structure is destroyed. Projectiles strike anywhere over the footprint.
+   A site must be on the map, clear of other structures, and flat enough for the type's `max_rise`.
 
 ## Order of work
 
 1. Resources, stores, producers, stalls, and factories with queues (rules 1 to 6), with scenario tests. Built:
    `sim3d::economy` and `Command::Produce`/`ClearQueue` in `world`. Extractors wait for resource spots.
-2. Builders, frames, assisting and structure footprints (rules 7 and 8).
+2. Builders, frames, assisting and structure footprints (rules 7 and 8). Built: `Command::Build`/`Assist` and
+   `world/construction.rs`.
 3. Resource spots on the map and extractors; wrecks and reclaim.

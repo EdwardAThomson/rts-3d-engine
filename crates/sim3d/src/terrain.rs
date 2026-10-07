@@ -33,6 +33,11 @@ impl Heightmap {
         self.height
     }
 
+    /// The height at corner `(cx, cy)`, from 0 to the width and height inclusive.
+    pub fn corner_height(&self, cx: i32, cy: i32) -> i32 {
+        self.corners[(cy * (self.width + 1) + cx) as usize]
+    }
+
     fn corner(&self, cx: i32, cy: i32) -> i64 {
         i64::from(self.corners[(cy * (self.width + 1) + cx) as usize])
     }

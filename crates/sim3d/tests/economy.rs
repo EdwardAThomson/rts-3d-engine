@@ -23,6 +23,7 @@ fn types() -> Vec<UnitType> {
         weapon: None,
         armour: 0,
         production,
+        structure: None,
     };
     vec![
         unit(128, Production { build_power: 10, builds: vec![TANK, SCOUT], ..Default::default() }),
@@ -50,7 +51,7 @@ fn until_built(world: &mut World, factory: u32, limit: u32) -> Option<(u32, u32)
     for _ in 0..limit {
         let tick = world.tick();
         for e in world.step() {
-            if let Event::Built { factory: f, unit } = e
+            if let Event::Built { by: f, unit } = e
                 && f == factory
             {
                 return Some((tick, unit));
@@ -92,7 +93,7 @@ fn spending_beyond_income_slows_every_factory_of_that_player_alike() {
     for _ in 0..500 {
         let tick = world.tick();
         for e in world.step() {
-            if let Event::Built { factory, .. } = e {
+            if let Event::Built { by: factory, .. } = e {
                 built.push((tick, factory));
             }
         }

@@ -2,8 +2,9 @@
 //!
 //! A tick runs in a fixed order: commands; then combat (every armed unit with a target fires or closes in, in
 //! id order; every projectile flies, in id order; damage is applied in the order it was dealt; the dead are
-//! removed in id order); then movement; then the economy (income, then factories pay for and build their items,
-//! see `economy`). Everyone fires before anyone is hurt, so two units that kill each other
+//! removed in id order); then movement; then construction (builders head for their sites and place frames, see
+//! `construction`); then the economy (income, then factories and builders pay for and build their items, see
+//! `economy`). Everyone fires before anyone is hurt, so two units that kill each other
 //! on the same tick both get their shot, whichever has the lower id. This follows the combat tick in
 //! plans/rts/rules-combat.md.
 //!
@@ -23,7 +24,7 @@
 //! The push-apart idea is the separation rule of Reynolds' boids ("Steering Behaviors For Autonomous
 //! Characters", 1999); the code is our own.
 
-use crate::economy::{Job, Production, Store, affordable, paid};
+use crate::economy::{Job, Production, Store, Structure, affordable, paid};
 use crate::movement::{FlowField, MoveClass, can_step};
 use crate::space::{SUB, Vec3};
 use crate::terrain::Heightmap;
@@ -33,6 +34,8 @@ use rts_core::imath::isqrt;
 use rts_core::replay::{CommandQueue, Logged};
 use rts_core::rng::{random_int, seed_state};
 use std::collections::BTreeMap;
+
+mod construction;
 
 /// An order from a player or the AI. Commands are the only input to the simulation, so the starting state, the
 /// seed and the command log replay a game exactly.
@@ -53,6 +56,12 @@ pub enum Command {
     Produce { unit: u32, kind: usize, repeat: bool },
     /// Empty a factory's queue. What was already paid towards the item in progress is lost.
     ClearQueue { unit: u32 },
+    /// Build a structure of type `kind` whose footprint's north-west cell is `(cx, cy)`: go next to the site,
+    /// place a frame there once no ground unit stands on it, and build it. Ignored unless the unit can build that
+    /// type and the site is on the map, clear of other structures and flat enough.
+    Build { unit: u32, kind: usize, cx: i32, cy: i32 },
+    /// Help build a frame of the unit's own side, going next to it first.
+    Assist { unit: u32, target: u32 },
 }
 
 /// Why a move ended.
@@ -98,9 +107,14 @@ pub enum Event {
         by: u32,
         at: Vec3,
     },
-    /// A factory finished a unit.
+    /// A unit was finished: built by a factory, or a frame completed by a builder.
     Built {
-        factory: u32,
+        by: u32,
+        unit: u32,
+    },
+    /// A builder placed the frame of a structure.
+    Placed {
+        by: u32,
         unit: u32,
     },
 }
@@ -118,6 +132,8 @@ pub struct UnitType {
     pub armour: usize,
     /// What it costs, builds and produces.
     pub production: Production,
+    /// Set for structures: units that never move and block ground movement.
+    pub structure: Option<Structure>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,13 +163,23 @@ pub struct Unit {
     pub queue: Vec<Job>,
     /// Build work done on the first item in the queue.
     pub work: i64,
+    /// Set while the unit is a frame still being built: the build work done on it so far. A frame does nothing
+    /// but stand there and take damage.
+    pub build: Option<i64>,
+    /// The frame this builder is building.
+    pub assist: Option<u32>,
+    /// A structure this builder is on its way to place: its type and its footprint's north-west cell.
+    pub plan: Option<(usize, i32, i32)>,
 }
 
 impl Canon for Unit {
     fn canon(&self, w: &mut CanonHasher) {
         let goal = self.goal.map(|(x, y)| vec![x, y]);
         let rest = self.rest.map(|(x, y)| vec![x, y]);
+        let plan = self.plan.map(|(k, x, y)| vec![k as i32, x, y]);
         w.object()
+            .opt("assist", self.assist.as_ref())
+            .opt("build", self.build.as_ref())
             .field("chase", &self.chase)
             .field("cooldown", &self.cooldown)
             .opt("goal", goal.as_ref())
@@ -162,6 +188,7 @@ impl Canon for Unit {
             .field("id", &self.id)
             .field("kind", &(self.kind as u32))
             .field("owner", &self.owner)
+            .opt("plan", plan.as_ref())
             .field("pos", &self.pos)
             .opt("queue", (!self.queue.is_empty()).then_some(&self.queue))
             .opt("rest", rest.as_ref())
@@ -189,6 +216,9 @@ pub struct World {
     /// One flow field per unit type and goal cell, shared by every unit sent there. Derived from the map, so it is
     /// a cache and not part of the state hash.
     fields: BTreeMap<(usize, (i32, i32)), FlowField>,
+    /// The cells under a structure's footprint, one per cell in row order. Derived from the units, so it is a
+    /// cache and not part of the state hash.
+    blocked: Vec<bool>,
 }
 
 impl World {
@@ -196,7 +226,10 @@ impl World {
     pub fn new(map: Heightmap, types: Vec<UnitType>, seed: i32) -> Self {
         for t in &types {
             let class = &t.movement;
-            assert!(class.speed > 0, "a movement class must move");
+            assert!(class.speed > 0 || t.structure.is_some(), "a movement class must move");
+            if let Some(s) = t.structure {
+                assert!(s.width > 0 && s.depth > 0 && s.max_rise >= 0, "a structure covers at least a cell");
+            }
             assert!((0..100).contains(&class.climb_slowdown), "climb slowdown is a percent below 100");
             assert!((1..=SUB / 2).contains(&class.radius), "a unit's radius is from 1 to half a cell");
             assert!(t.max_health > 0 && t.height >= 0, "a unit has health and a height");
@@ -225,6 +258,7 @@ impl World {
             tick: 0,
             commands: CommandQueue::default(),
             fields: BTreeMap::new(),
+            blocked: Vec::new(),
         }
     }
 
@@ -274,14 +308,30 @@ impl World {
         self.spawn_for(0, kind, x, y)
     }
 
-    /// Place a new unit of type `kind`, owned by `owner`, on the ground at `(x, y)` and return its id.
+    /// Place a new unit of type `kind`, owned by `owner`, on the ground at `(x, y)` and return its id. A structure
+    /// is moved to the nearest spot where its footprint lines up with the cells.
     pub fn spawn_for(&mut self, owner: u8, kind: usize, x: i32, y: i32) -> u32 {
-        let (x, y) = self.onto_map(x, y);
+        let id = self.place(owner, kind, x, y, false);
+        if self.types[kind].structure.is_some() {
+            self.reblock();
+        }
+        id
+    }
+
+    /// Add a unit, finished or as a frame, without updating the blocked cells.
+    fn place(&mut self, owner: u8, kind: usize, x: i32, y: i32, frame: bool) -> u32 {
+        let (x, y) = match self.types[kind].structure {
+            Some(s) => {
+                let snap = |v: i32, cells: i32| (v - cells * SUB / 2 + SUB / 2).div_euclid(SUB) * SUB + cells * SUB / 2;
+                (snap(x, s.width), snap(y, s.depth))
+            }
+            None => self.onto_map(x, y),
+        };
         let id = self.next_id;
         self.next_id += 1;
         let t = &self.types[kind];
         let z = self.map.sample(x, y) + t.movement.altitude;
-        let health = t.max_health;
+        let health = if frame { 1 } else { t.max_health };
         self.units.push(Unit {
             id,
             kind,
@@ -296,6 +346,9 @@ impl World {
             hunt: false,
             queue: Vec::new(),
             work: 0,
+            build: frame.then_some(0),
+            assist: None,
+            plan: None,
         });
         id
     }
@@ -328,6 +381,10 @@ impl World {
                 if let Some(reason) = advance(&self.map, class, field, unit, goal) {
                     (unit.goal, unit.hunt) = (None, false);
                     unit.rest = (reason == MoveEnd::Arrived).then_some(goal);
+                    if reason == MoveEnd::Unreachable {
+                        // A builder that cannot get to its site gives up on it.
+                        (unit.plan, unit.assist) = (None, None);
+                    }
                     ended.push((i, reason));
                 }
             }
@@ -338,6 +395,7 @@ impl World {
             let u = &self.units[i];
             Event::MoveEnded { unit: u.id, reason, x: u.pos.x, y: u.pos.y }
         }));
+        self.construct(&mut events);
         self.economy(&mut events);
         self.tick += 1;
         events
@@ -349,11 +407,14 @@ impl World {
 
     /// Send unit `i` towards a point, sharing the flow field for its type and the goal cell.
     fn set_goal(&mut self, i: usize, x: i32, y: i32) {
-        let goal = self.onto_map(x, y);
         let kind = self.units[i].kind;
+        if self.types[kind].structure.is_some() {
+            return;
+        }
+        let goal = self.onto_map(x, y);
         let cell = cell_of(&self.map, goal);
-        let (map, types) = (&self.map, &self.types);
-        self.fields.entry((kind, cell)).or_insert_with(|| FlowField::build(map, &types[kind].movement, cell));
+        let (map, blocked, types) = (&self.map, &self.blocked, &self.types);
+        self.fields.entry((kind, cell)).or_insert_with(|| FlowField::build(map, blocked, &types[kind].movement, cell));
         self.units[i].goal = Some(goal);
         self.units[i].rest = None;
     }
@@ -363,7 +424,8 @@ impl World {
         for i in 0..self.units.len() {
             let unit = &mut self.units[i];
             unit.cooldown = (unit.cooldown - 1).max(0);
-            let Some(weapon) = self.types[unit.kind].weapon.clone() else {
+            let weapon = self.types[unit.kind].weapon.clone().filter(|_| unit.build.is_none());
+            let Some(weapon) = weapon else {
                 unit.target = None;
                 continue;
             };
@@ -387,7 +449,7 @@ impl World {
                 continue;
             };
             let (muzzle, middle, in_range, in_sight) = self.aim(i, t, &weapon);
-            let (me, them) = (&self.units[i], &self.units[t]);
+            let me = &self.units[i];
             if !(in_range && in_sight) && !me.chase {
                 // A target picked by the unit itself is dropped once it slips out of range or sight; only an
                 // ordered attack gives chase.
@@ -397,15 +459,16 @@ impl World {
             if !(in_range && in_sight) {
                 // Close in, re-aiming the chase whenever the target moves to another cell. If the target cannot be
                 // reached, hold and keep watching rather than ordering a hopeless move every tick.
-                let target_cell = cell_of(&self.map, (them.pos.x, them.pos.y));
+                let (x, y) = self.towards(i, t);
+                let target_cell = cell_of(&self.map, (x, y));
                 if me.goal.map(|g| cell_of(&self.map, g)) != Some(target_cell) {
-                    let (x, y, here) = (them.pos.x, them.pos.y, cell_of(&self.map, (me.pos.x, me.pos.y)));
+                    let here = cell_of(&self.map, (me.pos.x, me.pos.y));
                     let kind = me.kind;
-                    let (map, types) = (&self.map, &self.types);
+                    let (map, blocked, types) = (&self.map, &self.blocked, &self.types);
                     let field = self
                         .fields
                         .entry((kind, target_cell))
-                        .or_insert_with(|| FlowField::build(map, &types[kind].movement, target_cell));
+                        .or_insert_with(|| FlowField::build(map, blocked, &types[kind].movement, target_cell));
                     if field.cost(here).is_some() {
                         self.set_goal(i, x, y);
                     } else {
@@ -516,9 +579,7 @@ impl World {
             if units
                 && let Some(u) = self.units.iter().find(|u| {
                     let t = &self.types[u.kind];
-                    let r = i64::from(t.movement.radius);
-                    let (dx, dy) = (i64::from(at.x - u.pos.x), i64::from(at.y - u.pos.y));
-                    u.id != firer && dx * dx + dy * dy <= r * r && (u.pos.z..=u.pos.z + t.height).contains(&at.z)
+                    u.id != firer && self.gap(u, at.x, at.y) == 0 && (u.pos.z..=u.pos.z + t.height).contains(&at.z)
                 })
             {
                 return Contact::Struck(at, Some(u.id));
@@ -590,7 +651,12 @@ impl World {
                 events.push(Event::Destroyed { unit: u.id, by, at: u.pos });
             }
         }
+        let types = &self.types;
+        let fell = self.units.iter().any(|u| u.health <= 0 && types[u.kind].structure.is_some());
         self.units.retain(|u| u.health > 0);
+        if fell {
+            self.reblock();
+        }
     }
 
     /// The indices of units by the cell they stand in, each list in id order.
@@ -639,6 +705,9 @@ impl World {
         let mut push = vec![(0i64, 0i64); self.units.len()];
         for (i, j) in self.close_pairs(0) {
             let (a, b) = (&self.units[i], &self.units[j]);
+            if self.types[a.kind].structure.is_some() || self.types[b.kind].structure.is_some() {
+                continue;
+            }
             let (mut dx, mut dy) = (i64::from(b.pos.x - a.pos.x), i64::from(b.pos.y - a.pos.y));
             let d = isqrt((dx * dx + dy * dy) as u64) as i64;
             let reach = i64::from(self.types[a.kind].movement.radius + self.types[b.kind].movement.radius);
@@ -675,7 +744,8 @@ impl World {
             let u = &self.units[i];
             let class = &self.types[u.kind].movement;
             let to = self.onto_map((i64::from(u.pos.x) + px) as i32, (i64::from(u.pos.y) + py) as i32);
-            if can_step(&self.map, class, cell_of(&self.map, (u.pos.x, u.pos.y)), cell_of(&self.map, to)) {
+            if can_step(&self.map, &self.blocked, class, cell_of(&self.map, (u.pos.x, u.pos.y)), cell_of(&self.map, to))
+            {
                 let z = self.map.sample(to.0, to.1) + class.altitude;
                 self.units[i].pos = Vec3::new(to.0, to.1, z);
             }
@@ -720,13 +790,14 @@ impl World {
         ended.sort_unstable_by_key(|&(i, _)| i);
     }
 
-    /// Income, then building. Every unit adds what it produces to its owner's store, and the store is capped.
-    /// Then every factory asks for what a full tick of work on its first item would cost. Where a player's store
-    /// cannot cover all of their factories' requests for some resource, all of them work at the same lower
-    /// rate: the lowest share of what was asked that the store can pay, over all resources. Factories are then
-    /// paid in id order, each never taking more than is left. Finished units appear beside the factory.
+    /// Income, then building. Every finished unit adds what it produces to its owner's store, and the store is
+    /// capped. Then every spender (a factory working on its first queued item, or a builder next to the frame it
+    /// is building) asks for what a full tick of its build power would cost. Where a player's store cannot cover
+    /// all their requests for some resource, all of their spenders work at the same lower rate: the lowest share
+    /// of what was asked that the store can pay, over all resources. Spenders are then paid in id order, each
+    /// never taking more than is left. Finished units appear beside their factory; finished frames become whole.
     fn economy(&mut self, events: &mut Vec<Event>) {
-        for u in &self.units {
+        for u in self.units.iter().filter(|u| u.build.is_none()) {
             let produces = &self.types[u.kind].production.produces;
             if let Ok(s) = self.stores.binary_search_by_key(&u.owner, |s| s.owner) {
                 for (amount, &add) in self.stores[s].amount.iter_mut().zip(produces) {
@@ -741,20 +812,15 @@ impl World {
             }
             asked[s] = vec![0i64; store.amount.len()];
         }
-        let job = |u: &Unit| -> Option<(&Production, i64, &Production)> {
-            let head = u.queue.first()?;
-            let me = &self.types[u.kind].production;
-            (me.build_power > 0).then(|| (me, me.build_power, &self.types[head.kind].production))
-        };
-        for u in &self.units {
-            let (Some((_, power, item)), Ok(s)) = (job(u), self.stores.binary_search_by_key(&u.owner, |s| s.owner))
-            else {
-                continue;
-            };
-            let to = (u.work + power).min(item.build_time);
+        let spenders: Vec<Spender> = (0..self.units.len()).filter_map(|i| self.spender(i)).collect();
+        for sp in &spenders {
+            let Ok(s) = self.stores.binary_search_by_key(&self.units[sp.unit].owner, |s| s.owner) else { continue };
+            let item = &self.types[sp.item].production;
+            let from = self.work_of(sp.on);
+            let to = (from + sp.power).min(item.build_time);
             for (r, ask) in asked[s].iter_mut().enumerate() {
                 let cost = item.cost_of(r);
-                *ask += paid(cost, to, item.build_time) - paid(cost, u.work, item.build_time);
+                *ask += paid(cost, to, item.build_time) - paid(cost, from, item.build_time);
             }
         }
         for (store, asked) in self.stores.iter_mut().zip(&asked) {
@@ -768,44 +834,92 @@ impl World {
                 .unwrap_or(100);
         }
         let mut finished = Vec::new();
-        for i in 0..self.units.len() {
-            let u = &self.units[i];
-            let Some((_, power, item)) = job(u) else { continue };
-            let store = self.stores.binary_search_by_key(&u.owner, |s| s.owner).ok();
+        for sp in spenders {
+            let store = self.stores.binary_search_by_key(&self.units[sp.unit].owner, |s| s.owner).ok();
             let (rate, have) = match store {
                 Some(s) => (self.stores[s].rate, self.stores[s].amount.clone()),
                 // Nothing to spend, so only things that cost nothing get built.
                 None => (100, Vec::new()),
             };
+            let item = &self.types[sp.item].production;
             let time = item.build_time;
-            let mut to = (u.work + power * rate / 100).min(time);
+            if let Work::Frame(t) = sp.on
+                && self.units[t].build.is_none()
+            {
+                continue; // Another builder finished this frame earlier in the tick.
+            }
+            let from = self.work_of(sp.on);
+            let mut to = (from + sp.power * rate / 100).min(time);
             for r in 0..item.cost.len() {
                 let budget = have.get(r).copied().unwrap_or(0);
-                to = to.min(affordable(item.cost_of(r), u.work, time, budget));
+                to = to.min(affordable(item.cost_of(r), from, time, budget));
             }
             if let Some(s) = store {
                 for (r, amount) in self.stores[s].amount.iter_mut().enumerate() {
                     let cost = item.cost_of(r);
-                    *amount -= paid(cost, to, time) - paid(cost, u.work, time);
+                    *amount -= paid(cost, to, time) - paid(cost, from, time);
                 }
             }
-            let u = &mut self.units[i];
-            u.work = to;
-            if to == time {
-                let job = u.queue.remove(0);
-                u.work = 0;
-                if job.repeat {
-                    u.queue.push(job.clone());
+            match sp.on {
+                Work::Queue(i) => {
+                    let u = &mut self.units[i];
+                    u.work = to;
+                    if to == time {
+                        let job = u.queue.remove(0);
+                        u.work = 0;
+                        if job.repeat {
+                            u.queue.push(job.clone());
+                        }
+                        finished.push((i, job.kind));
+                    }
                 }
-                finished.push((i, job.kind));
+                Work::Frame(t) => {
+                    // A frame's health grows with the work done on it, on top of any damage it has taken.
+                    let max = i64::from(self.types[sp.item].max_health);
+                    let u = &mut self.units[t];
+                    u.health = (i64::from(u.health) + max * to / time - max * from / time).min(max) as i32;
+                    u.build = Some(to);
+                    if to == time {
+                        u.build = None;
+                        events.push(Event::Built { by: self.units[sp.unit].id, unit: self.units[t].id });
+                    }
+                }
             }
         }
         for (i, kind) in finished {
             let f = &self.units[i];
-            let gap = self.types[f.kind].movement.radius + self.types[kind].movement.radius + CONTACT;
-            let (factory, owner, x, y) = (f.id, f.owner, f.pos.x, f.pos.y + gap);
+            let gap = self.half_extent(f.kind, 1) + self.types[kind].movement.radius + CONTACT;
+            let (by, owner, x, y) = (f.id, f.owner, f.pos.x, f.pos.y + gap);
             let unit = self.spawn_for(owner, kind, x, y);
-            events.push(Event::Built { factory, unit });
+            events.push(Event::Built { by, unit });
+        }
+    }
+
+    /// What unit `i` is building this tick, if anything: the first item in its queue, or the frame it is
+    /// assisting if it is close enough.
+    fn spender(&self, i: usize) -> Option<Spender> {
+        let u = &self.units[i];
+        let power = self.types[u.kind].production.build_power;
+        if u.build.is_some() || power == 0 {
+            return None;
+        }
+        if let Some(head) = u.queue.first() {
+            return Some(Spender { unit: i, on: Work::Queue(i), item: head.kind, power });
+        }
+        let t = self.index_of(u.assist?)?;
+        let frame = &self.units[t];
+        (frame.build.is_some() && self.in_reach(i, t)).then_some(Spender {
+            unit: i,
+            on: Work::Frame(t),
+            item: frame.kind,
+            power,
+        })
+    }
+
+    fn work_of(&self, on: Work) -> i64 {
+        match on {
+            Work::Queue(i) => self.units[i].work,
+            Work::Frame(t) => self.units[t].build.unwrap_or(0),
         }
     }
 
@@ -814,28 +928,32 @@ impl World {
             Command::Move { unit, x, y } => {
                 let Some(i) = self.index_of(unit) else { return };
                 let u = &mut self.units[i];
-                (u.target, u.chase, u.hunt) = (None, false, false);
+                (u.target, u.chase, u.hunt, u.plan, u.assist) = (None, false, false, None, None);
                 self.set_goal(i, x, y);
             }
             Command::AttackMove { unit, x, y } => {
                 let Some(i) = self.index_of(unit) else { return };
                 let u = &mut self.units[i];
-                (u.target, u.chase, u.hunt) = (None, false, true);
+                (u.target, u.chase, u.hunt, u.plan, u.assist) = (None, false, true, None, None);
                 self.set_goal(i, x, y);
             }
             Command::Stop { unit } => {
                 if let Some(i) = self.index_of(unit) {
                     let u = &mut self.units[i];
                     (u.goal, u.rest, u.target, u.chase, u.hunt) = (None, None, None, false, false);
+                    (u.plan, u.assist) = (None, None);
                 }
             }
             Command::Produce { unit, kind, repeat } => {
                 if let Some(i) = self.index_of(unit)
                     && self.types[self.units[i].kind].production.builds.contains(&kind)
+                    && self.types[kind].structure.is_none()
                 {
                     self.units[i].queue.push(Job { kind, repeat });
                 }
             }
+            Command::Build { unit, kind, cx, cy } => self.order_build(unit, kind, cx, cy),
+            Command::Assist { unit, target } => self.order_assist(unit, target),
             Command::ClearQueue { unit } => {
                 if let Some(i) = self.index_of(unit) {
                     (self.units[i].queue, self.units[i].work) = (Vec::new(), 0);
@@ -847,7 +965,7 @@ impl World {
                     && self.types[self.units[i].kind].weapon.is_some()
                 {
                     let u = &mut self.units[i];
-                    (u.target, u.chase, u.hunt) = (Some(target), true, false);
+                    (u.target, u.chase, u.hunt, u.plan, u.assist) = (Some(target), true, false, None, None);
                 }
             }
         }
@@ -872,6 +990,21 @@ impl Canon for World {
             .array("units", &self.units)
             .end();
     }
+}
+
+/// A unit building something this tick: `unit` adds `power` to the work on `on`, an item of type `item`.
+struct Spender {
+    unit: usize,
+    on: Work,
+    item: usize,
+    power: i64,
+}
+
+/// Where build work goes: the first item in a factory's queue, or a frame.
+#[derive(Clone, Copy)]
+enum Work {
+    Queue(usize),
+    Frame(usize),
 }
 
 /// One damage record: who is hurt, by whom, and how much.

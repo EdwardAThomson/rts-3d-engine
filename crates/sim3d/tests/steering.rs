@@ -17,6 +17,7 @@ fn classes() -> Vec<UnitType> {
             weapon: None,
             armour: 0,
             production: Production::default(),
+            structure: None,
         },
         UnitType {
             movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: RADIUS },
@@ -25,6 +26,7 @@ fn classes() -> Vec<UnitType> {
             weapon: None,
             armour: 0,
             production: Production::default(),
+            structure: None,
         },
     ]
 }

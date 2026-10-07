@@ -25,6 +25,7 @@ fn armed(max_health: i32, weapon: Weapon) -> UnitType {
         weapon: Some(weapon),
         armour: 0,
         production: Production::default(),
+        structure: None,
     }
 }
 
@@ -48,6 +49,7 @@ fn types() -> Vec<UnitType> {
             weapon: None,
             armour: 0,
             production: Production::default(),
+            structure: None,
         },
         UnitType {
             movement: tracked(16),
@@ -56,6 +58,7 @@ fn types() -> Vec<UnitType> {
             weapon: None,
             armour: 0,
             production: Production::default(),
+            structure: None,
         },
         armed(25, cannon()),
     ]
@@ -401,6 +404,7 @@ fn armoured() -> Vec<UnitType> {
         weapon: None,
         armour,
         production: Production::default(),
+        structure: None,
     };
     vec![armed(100, gun), target(LIGHT, 0), target(HEAVY, 0), target(AIRFRAME, 0)]
 }

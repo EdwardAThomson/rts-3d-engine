@@ -85,14 +85,22 @@ fn centre_heights(map: &Heightmap) -> Vec<i32> {
 /// The cost of one step from cell `a` to the neighbouring cell `b`, or `None` if `class` cannot make it. A
 /// diagonal step also needs both cells it squeezes between to be crossable from `a`, so units never cut a
 /// corner of a cliff.
-fn step_cost(size: (i32, i32), heights: &[i32], class: &MoveClass, a: (i32, i32), b: (i32, i32)) -> Option<u32> {
-    step_cost_by(size, |(x, y)| heights[(y * size.0 + x) as usize], class, a, b)
+fn step_cost(
+    size: (i32, i32),
+    heights: &[i32],
+    blocked: &[bool],
+    class: &MoveClass,
+    a: (i32, i32),
+    b: (i32, i32),
+) -> Option<u32> {
+    step_cost_by(size, |(x, y)| heights[(y * size.0 + x) as usize], blocked, class, a, b)
 }
 
 /// `step_cost` with the cell-centre heights given by a function, for callers without a table of them.
 fn step_cost_by(
     size: (i32, i32),
     h: impl Fn((i32, i32)) -> i32,
+    blocked: &[bool],
     class: &MoveClass,
     a: (i32, i32),
     b: (i32, i32),
@@ -102,7 +110,12 @@ fn step_cost_by(
     if !inside(a) || !inside(b) {
         return None;
     }
+    // Structures block ground units, which also may not squeeze diagonally past one.
     let diagonal = a.0 != b.0 && a.1 != b.1;
+    let solid = |(x, y): (i32, i32)| blocked.get((y * w + x) as usize).copied().unwrap_or(false);
+    if class.altitude == 0 && (solid(a) || solid(b) || (diagonal && (solid((b.0, a.1)) || solid((a.0, b.1))))) {
+        return None;
+    }
     if diagonal {
         for side in [(b.0, a.1), (a.0, b.1)] {
             if !class.can_cross(h(side) - h(a), SUB) {
@@ -119,20 +132,22 @@ fn step_cost_by(
 }
 
 /// Whether `class` may move from cell `a` into cell `b`, which is the same cell or one of its eight neighbours,
-/// by the same rules the flow fields use.
-pub fn can_step(map: &Heightmap, class: &MoveClass, a: (i32, i32), b: (i32, i32)) -> bool {
+/// by the same rules the flow fields use. Cells marked in `blocked`, one per cell in row order, are closed to ground
+/// classes; an empty slice blocks nothing.
+pub fn can_step(map: &Heightmap, blocked: &[bool], class: &MoveClass, a: (i32, i32), b: (i32, i32)) -> bool {
     if a == b {
         return true;
     }
     let h = |(cx, cy): (i32, i32)| map.sample(cx * SUB + SUB / 2, cy * SUB + SUB / 2);
     (a.0 - b.0).abs() <= 1
         && (a.1 - b.1).abs() <= 1
-        && step_cost_by((map.width(), map.height()), h, class, a, b).is_some()
+        && step_cost_by((map.width(), map.height()), h, blocked, class, a, b).is_some()
 }
 
 impl FlowField {
-    /// Search the whole map outwards from `goal` (a cell, clamped onto the map) with Dijkstra's algorithm.
-    pub fn build(map: &Heightmap, class: &MoveClass, goal: (i32, i32)) -> Self {
+    /// Search the whole map outwards from `goal` (a cell, clamped onto the map) with Dijkstra's algorithm. Cells
+    /// marked in `blocked` are closed to ground classes, as in `can_step`.
+    pub fn build(map: &Heightmap, blocked: &[bool], class: &MoveClass, goal: (i32, i32)) -> Self {
         let (w, hgt) = (map.width(), map.height());
         let goal = (goal.0.clamp(0, w - 1), goal.1.clamp(0, hgt - 1));
         let heights = centre_heights(map);
@@ -152,7 +167,7 @@ impl FlowField {
             // Walk backwards: the cost that matters is moving from the neighbour `a` into `b`.
             for (dx, dy) in NEIGHBOURS {
                 let a = (b.0 + dx, b.1 + dy);
-                if let Some(step) = step_cost((w, hgt), &heights, class, a, b) {
+                if let Some(step) = step_cost((w, hgt), &heights, blocked, class, a, b) {
                     let total = c + step;
                     if total < cost[index(a)] {
                         cost[index(a)] = total;
@@ -171,7 +186,7 @@ impl FlowField {
             let mut best: Option<(u32, usize)> = None;
             for (dx, dy) in NEIGHBOURS {
                 let b = (a.0 + dx, a.1 + dy);
-                if let Some(step) = step_cost((w, hgt), &heights, class, a, b)
+                if let Some(step) = step_cost((w, hgt), &heights, blocked, class, a, b)
                     && cost[index(b)] != u32::MAX
                 {
                     let total = step + cost[index(b)];
@@ -235,7 +250,7 @@ mod tests {
     #[test]
     fn flat_field_points_straight_at_the_goal() {
         let map = Heightmap::flat(5, 5, 0);
-        let field = FlowField::build(&map, &tracked(), (4, 4));
+        let field = FlowField::build(&map, &[], &tracked(), (4, 4));
         assert_eq!(field.cost((4, 4)), Some(0));
         assert_eq!(field.next((4, 4)), None);
         assert_eq!(field.next((0, 0)), Some((1, 1)));
@@ -247,16 +262,16 @@ mod tests {
     fn no_corner_cutting_past_a_cliff() {
         // Two low cells on one diagonal, two towers on the other.
         let towers = [0, 900, 900, 0];
-        assert_eq!(step_cost((2, 2), &towers, &tracked(), (0, 0), (1, 1)), None);
-        assert_eq!(step_cost((2, 2), &[0; 4], &tracked(), (0, 0), (1, 1)), Some(DIAG as u32));
-        assert_eq!(step_cost((2, 2), &[0; 4], &tracked(), (1, 1), (2, 2)), None, "off the map");
+        assert_eq!(step_cost((2, 2), &towers, &[], &tracked(), (0, 0), (1, 1)), None);
+        assert_eq!(step_cost((2, 2), &[0; 4], &[], &tracked(), (0, 0), (1, 1)), Some(DIAG as u32));
+        assert_eq!(step_cost((2, 2), &[0; 4], &[], &tracked(), (1, 1), (2, 2)), None, "off the map");
     }
 
     #[test]
     fn climbing_costs_more_than_descending() {
         let ramp = [0, 32];
-        let up = step_cost((2, 1), &ramp, &tracked(), (0, 0), (1, 0)).unwrap();
-        let down = step_cost((2, 1), &ramp, &tracked(), (1, 0), (0, 0)).unwrap();
+        let up = step_cost((2, 1), &ramp, &[], &tracked(), (0, 0), (1, 0)).unwrap();
+        let down = step_cost((2, 1), &ramp, &[], &tracked(), (1, 0), (0, 0)).unwrap();
         assert_eq!((up, down), (SUB as u32 * 100 / 75, SUB as u32));
     }
 }
