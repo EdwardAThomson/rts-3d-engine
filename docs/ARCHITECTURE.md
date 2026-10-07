@@ -24,7 +24,9 @@ units per side; measurements decide whether we go further.
 | Crate | Job | Status |
 |---|---|---|
 | `sim3d` | The simulation: `space` (fixed-point `Vec3`, `SUB` = 256 sub-cell units per cell), `terrain` (corner heightmap, integer bilinear sampling, line of sight). | Started |
-| later: movement | Flow fields for groups plus local steering, slope costs per movement class (tracked, wheeled, legged, hover, air). | Planned |
+| `sim3d` | `movement` (movement classes from data with a slope limit, climb slowdown and altitude; one flow field per class and goal cell, shared by every unit sent there) and `world` (units, commands with a replayable log, `MoveEnded` events, the tick). | Started |
+| `sim3d` | Steering in `world`: units are discs that push apart within their layer (ground or air), moving units shove idle ones aside, head-on pairs slide round each other, pushes respect slope limits, and a group packs round its goal. | Started |
+| later: movement polish | Closest-reachable fallback for unreachable goals, facing and turn rates, formations. | Planned |
 | later: weapons | Ballistic and direct-fire projectiles in fixed point, blocked by terrain and units. | Planned |
 | later: economy | Flow economy as a switchable module. | Planned |
 | later: renderer | wgpu, native and WebGPU, reading only `events` and snapshots, with strategic zoom from day one. | Planned |
