@@ -3,15 +3,25 @@ use rts_core::rng::{random_int, seed_state};
 use sim3d::movement::MoveClass;
 use sim3d::space::SUB;
 use sim3d::terrain::Heightmap;
-use sim3d::world::{Command, Event, MoveEnd, World};
+use sim3d::world::{Command, Event, MoveEnd, UnitType, World};
 
 const TRACKED: usize = 0;
 const AIR: usize = 1;
 
-fn classes() -> Vec<MoveClass> {
+fn classes() -> Vec<UnitType> {
     vec![
-        MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64 },
-        MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: 64 },
+        UnitType {
+            movement: MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64 },
+            max_health: 100,
+            height: 64,
+            weapon: None,
+        },
+        UnitType {
+            movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: 64 },
+            max_health: 100,
+            height: 64,
+            weapon: None,
+        },
     ]
 }
 
@@ -48,7 +58,7 @@ fn walled(gap: bool) -> Heightmap {
 
 #[test]
 fn a_unit_crosses_flat_ground_at_its_speed() {
-    let mut world = World::new(Heightmap::flat(12, 3, 40), classes());
+    let mut world = World::new(Heightmap::flat(12, 3, 40), classes(), 1);
     let (x, y) = centre(0, 1);
     let id = world.spawn(TRACKED, x, y);
     assert_eq!(world.unit(id).unwrap().pos.z, 40, "units stand on the ground");
@@ -62,7 +72,7 @@ fn a_unit_crosses_flat_ground_at_its_speed() {
 
 #[test]
 fn ground_units_go_round_a_wall_and_aircraft_fly_over_it() {
-    let mut world = World::new(walled(true), classes());
+    let mut world = World::new(walled(true), classes(), 1);
     let (sx, sy) = centre(1, 1);
     let (gx, gy) = centre(7, 1);
     let tank = world.spawn(TRACKED, sx, sy);
@@ -75,7 +85,7 @@ fn ground_units_go_round_a_wall_and_aircraft_fly_over_it() {
     for _ in 0..600 {
         let tick = world.tick();
         for event in world.step() {
-            let Event::MoveEnded { unit, reason, .. } = event;
+            let Event::MoveEnded { unit, reason, .. } = event else { continue };
             assert_eq!(reason, MoveEnd::Arrived);
             arrived[(unit - 1) as usize] = Some(tick);
         }
@@ -98,7 +108,7 @@ fn ground_units_go_round_a_wall_and_aircraft_fly_over_it() {
 
 #[test]
 fn a_goal_behind_an_unbroken_wall_is_unreachable() {
-    let mut world = World::new(walled(false), classes());
+    let mut world = World::new(walled(false), classes(), 1);
     let (sx, sy) = centre(1, 4);
     let tank = world.spawn(TRACKED, sx, sy);
     let (gx, gy) = centre(7, 4);
@@ -115,7 +125,7 @@ fn climbing_is_slower_than_descending() {
     let corners: Vec<i32> = (0..2).flat_map(|_| (0..13).map(|cx| 16 * cx)).collect();
     let ramp = Heightmap::new(12, 1, corners);
     let ticks = |from: i32, to: i32| {
-        let mut world = World::new(ramp.clone(), classes());
+        let mut world = World::new(ramp.clone(), classes(), 1);
         let (x, y) = centre(from, 0);
         let id = world.spawn(TRACKED, x, y);
         world.command(Command::Move { unit: id, x: centre(to, 0).0, y });
@@ -130,7 +140,7 @@ fn climbing_is_slower_than_descending() {
 
 #[test]
 fn stop_ends_a_move_where_the_unit_stands() {
-    let mut world = World::new(Heightmap::flat(8, 8, 0), classes());
+    let mut world = World::new(Heightmap::flat(8, 8, 0), classes(), 1);
     let (x, y) = centre(0, 0);
     let id = world.spawn(TRACKED, x, y);
     world.command(Command::Move { unit: id, x: centre(7, 0).0, y });
@@ -147,7 +157,7 @@ fn stop_ends_a_move_where_the_unit_stands() {
 fn skirmish() -> World {
     let mut rng = seed_state(7);
     let corners = (0..25 * 25).map(|_| random_int(&mut rng, 40) as i32).collect();
-    let mut world = World::new(Heightmap::new(24, 24, corners), classes());
+    let mut world = World::new(Heightmap::new(24, 24, corners), classes(), 1);
     for i in 0..6 {
         let (x, y) = centre(2 + 3 * i, 2 + i);
         world.spawn(if i % 3 == 2 { AIR } else { TRACKED }, x, y);
@@ -175,7 +185,7 @@ fn a_replay_of_the_command_log_matches_tick_for_tick() {
     let mut arrived = Vec::new();
     for _ in 0..400 {
         skirmish_orders(&mut live);
-        for Event::MoveEnded { unit, reason, .. } in live.step() {
+        for (unit, reason) in move_ends(live.step()) {
             assert_eq!(reason, MoveEnd::Arrived);
             arrived.push(unit);
         }
@@ -196,5 +206,16 @@ fn a_replay_of_the_command_log_matches_tick_for_tick() {
     }
 
     // The golden hash pins today's movement rules. If a change moves it, say so and update it on purpose.
-    assert_eq!(hash_of(&live).hex(), "1a52899a");
+    assert_eq!(hash_of(&live).hex(), "1159a708");
+}
+
+/// The move endings among a tick's events.
+fn move_ends(events: Vec<Event>) -> Vec<(u32, MoveEnd)> {
+    events
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::MoveEnded { unit, reason, .. } => Some((unit, reason)),
+            _ => None,
+        })
+        .collect()
 }

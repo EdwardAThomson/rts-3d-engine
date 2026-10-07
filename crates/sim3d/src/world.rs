@@ -1,4 +1,10 @@
-//! The game state and its tick: units, the orders given to them, and movement over the terrain.
+//! The game state and its tick: units, the orders given to them, combat, and movement over the terrain.
+//!
+//! A tick runs in a fixed order: commands; then combat (every armed unit with a target fires or closes in, in
+//! id order; every projectile flies, in id order; damage is applied in the order it was dealt; the dead are
+//! removed in id order); then movement. Everyone fires before anyone is hurt, so two units that kill each other
+//! on the same tick both get their shot, whichever has the lower id. This follows the combat tick in
+//! plans/rts/rules-combat.md.
 //!
 //! Units follow their order's flow field from cell to cell. Within a tick a unit spends its speed budget along
 //! the way, carrying what is left past each waypoint, and slows when the ground ahead climbs.
@@ -15,9 +21,11 @@
 use crate::movement::{FlowField, MoveClass, can_step};
 use crate::space::{SUB, Vec3};
 use crate::terrain::Heightmap;
+use crate::weapon::{Projectile, Weapon};
 use rts_core::hash::{Canon, CanonHasher};
 use rts_core::imath::isqrt;
 use rts_core::replay::{CommandQueue, Logged};
+use rts_core::rng::{random_int, seed_state};
 use std::collections::BTreeMap;
 
 /// An order from a player or the AI. Commands are the only input to the simulation, so the starting state, the
@@ -26,8 +34,11 @@ use std::collections::BTreeMap;
 pub enum Command {
     /// Go to a point on the map, given in sub-cell units. Points off the map are moved onto its edge.
     Move { unit: u32, x: i32, y: i32 },
-    /// Stop where it stands.
+    /// Stop where it stands, and stop attacking.
     Stop { unit: u32 },
+    /// Attack another unit: close in until it is in range and in sight, then fire whenever reloaded, until it
+    /// is destroyed or another order is given.
+    Attack { unit: u32, target: u32 },
 }
 
 /// Why a move ended.
@@ -41,20 +52,72 @@ pub enum MoveEnd {
 /// Something that happened in a tick, for rendering, audio and logs. Nothing here feeds back into the state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    MoveEnded { unit: u32, reason: MoveEnd, x: i32, y: i32 },
+    MoveEnded {
+        unit: u32,
+        reason: MoveEnd,
+        x: i32,
+        y: i32,
+    },
+    /// A unit fired a projectile at a point.
+    Fired {
+        unit: u32,
+        projectile: u32,
+        from: Vec3,
+        aim: Vec3,
+    },
+    /// A projectile struck a unit, or the ground when `unit` is `None`, and burst.
+    Impact {
+        projectile: u32,
+        at: Vec3,
+        unit: Option<u32>,
+    },
+    /// A unit lost health.
+    Damaged {
+        unit: u32,
+        by: u32,
+        damage: i32,
+        health: i32,
+    },
+    /// A unit was destroyed and removed.
+    Destroyed {
+        unit: u32,
+        by: u32,
+        at: Vec3,
+    },
+}
+
+/// A kind of unit, read from data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnitType {
+    pub movement: MoveClass,
+    pub max_health: i32,
+    /// Height of the unit's body above the point it stands on, in height units. Shots strike anywhere in the
+    /// cylinder of this height and the movement radius, leave from its top and aim at its middle.
+    pub height: i32,
+    pub weapon: Option<Weapon>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unit {
     pub id: u32,
-    /// Index into the world's movement classes.
-    pub class: usize,
+    /// Index into the world's unit types.
+    pub kind: usize,
     pub pos: Vec3,
     /// Where the unit is going, in sub-cell units.
     pub goal: Option<(i32, i32)>,
     /// The goal of the move this unit last finished by arriving, until it is given a new order. Units still
     /// heading there stop when they touch it.
     pub rest: Option<(i32, i32)>,
+    pub health: i32,
+    /// The player it belongs to. Units attack the units of any other owner they see on their own.
+    pub owner: u8,
+    /// The unit it is attacking.
+    pub target: Option<u32>,
+    /// Whether it was ordered to attack, and so closes in, or picked the target itself and only fires while it
+    /// can.
+    pub chase: bool,
+    /// Ticks until its weapon has reloaded.
+    pub cooldown: i32,
 }
 
 impl Canon for Unit {
@@ -62,11 +125,16 @@ impl Canon for Unit {
         let goal = self.goal.map(|(x, y)| vec![x, y]);
         let rest = self.rest.map(|(x, y)| vec![x, y]);
         w.object()
-            .field("class", &(self.class as u32))
+            .field("chase", &self.chase)
+            .field("cooldown", &self.cooldown)
             .opt("goal", goal.as_ref())
+            .field("health", &self.health)
             .field("id", &self.id)
+            .field("kind", &(self.kind as u32))
+            .field("owner", &self.owner)
             .field("pos", &self.pos)
             .opt("rest", rest.as_ref())
+            .opt("target", self.target.as_ref())
             .end();
     }
 }
@@ -74,30 +142,45 @@ impl Canon for Unit {
 #[derive(Clone, Debug)]
 pub struct World {
     map: Heightmap,
-    classes: Vec<MoveClass>,
+    types: Vec<UnitType>,
     /// In id order, which is the order they were spawned in.
     units: Vec<Unit>,
+    /// In id order. Projectiles take ids from the same counter as units.
+    projectiles: Vec<Projectile>,
     next_id: u32,
+    /// The game's one random generator (scatter).
+    rng: i32,
     tick: u32,
     commands: CommandQueue<Command>,
-    /// One flow field per class and goal cell, shared by every unit sent there. Derived from the map, so it is
+    /// One flow field per unit type and goal cell, shared by every unit sent there. Derived from the map, so it is
     /// a cache and not part of the state hash.
     fields: BTreeMap<(usize, (i32, i32)), FlowField>,
 }
 
 impl World {
-    /// A world on `map` whose units move in the given classes, normally read from a setting pack.
-    pub fn new(map: Heightmap, classes: Vec<MoveClass>) -> Self {
-        for class in &classes {
+    /// A world on `map` with the given unit types, normally read from a setting pack, and a random seed.
+    pub fn new(map: Heightmap, types: Vec<UnitType>, seed: i32) -> Self {
+        for t in &types {
+            let class = &t.movement;
             assert!(class.speed > 0, "a movement class must move");
             assert!((0..100).contains(&class.climb_slowdown), "climb slowdown is a percent below 100");
             assert!((1..=SUB / 2).contains(&class.radius), "a unit's radius is from 1 to half a cell");
+            assert!(t.max_health > 0 && t.height >= 0, "a unit has health and a height");
+            if let Some(w) = &t.weapon {
+                assert!(w.range > 0 && w.reload > 0 && w.speed > 0, "a weapon has range, reload and speed");
+                assert!(
+                    w.gravity >= 0 && w.damage >= 0 && w.splash >= 0 && w.scatter >= 0,
+                    "no negative weapon values"
+                );
+            }
         }
         Self {
             map,
-            classes,
+            types,
             units: Vec::new(),
+            projectiles: Vec::new(),
             next_id: 1,
+            rng: seed_state(seed),
             tick: 0,
             commands: CommandQueue::default(),
             fields: BTreeMap::new(),
@@ -116,6 +199,10 @@ impl World {
         &self.units
     }
 
+    pub fn projectiles(&self) -> &[Projectile] {
+        &self.projectiles
+    }
+
     pub fn unit(&self, id: u32) -> Option<&Unit> {
         self.units.binary_search_by_key(&id, |u| u.id).ok().map(|i| &self.units[i])
     }
@@ -124,13 +211,31 @@ impl World {
         self.commands.log()
     }
 
-    /// Place a new unit of `class` on the ground at `(x, y)` and return its id.
-    pub fn spawn(&mut self, class: usize, x: i32, y: i32) -> u32 {
+    /// Place a new unit of type `kind`, owned by player 0, on the ground at `(x, y)` and return its id.
+    pub fn spawn(&mut self, kind: usize, x: i32, y: i32) -> u32 {
+        self.spawn_for(0, kind, x, y)
+    }
+
+    /// Place a new unit of type `kind`, owned by `owner`, on the ground at `(x, y)` and return its id.
+    pub fn spawn_for(&mut self, owner: u8, kind: usize, x: i32, y: i32) -> u32 {
         let (x, y) = self.onto_map(x, y);
         let id = self.next_id;
         self.next_id += 1;
-        let z = self.map.sample(x, y) + self.classes[class].altitude;
-        self.units.push(Unit { id, class, pos: Vec3::new(x, y, z), goal: None, rest: None });
+        let t = &self.types[kind];
+        let z = self.map.sample(x, y) + t.movement.altitude;
+        let health = t.max_health;
+        self.units.push(Unit {
+            id,
+            kind,
+            pos: Vec3::new(x, y, z),
+            goal: None,
+            rest: None,
+            health,
+            owner,
+            target: None,
+            chase: false,
+            cooldown: 0,
+        });
         id
     }
 
@@ -139,17 +244,22 @@ impl World {
         self.commands.push(self.tick, command);
     }
 
-    /// Run one tick: apply this tick's commands, move every unit in id order, push overlapping units apart,
-    /// then end the moves of units that reached their goal or touched a unit resting there.
+    /// Run one tick: apply this tick's commands, run combat, move every unit in id order, push overlapping
+    /// units apart, then end the moves of units that reached their goal or touched a unit resting there.
     pub fn step(&mut self) -> Vec<Event> {
         for command in self.commands.take(self.tick) {
             self.apply(command);
         }
+        let mut events = Vec::new();
+        let mut damage = Vec::new();
+        self.fire(&mut events);
+        self.fly(&mut events, &mut damage);
+        self.hurt(&mut events, damage);
         let mut ended = Vec::new();
         for (i, unit) in self.units.iter_mut().enumerate() {
             if let Some(goal) = unit.goal {
-                let class = &self.classes[unit.class];
-                let field = &self.fields[&(unit.class, cell_of(&self.map, goal))];
+                let class = &self.types[unit.kind].movement;
+                let field = &self.fields[&(unit.kind, cell_of(&self.map, goal))];
                 if let Some(reason) = advance(&self.map, class, field, unit, goal) {
                     unit.goal = None;
                     unit.rest = (reason == MoveEnd::Arrived).then_some(goal);
@@ -160,13 +270,254 @@ impl World {
         self.separate();
         self.arrive_by_contact(&mut ended);
         self.tick += 1;
-        ended
-            .into_iter()
-            .map(|(i, reason)| {
-                let u = &self.units[i];
-                Event::MoveEnded { unit: u.id, reason, x: u.pos.x, y: u.pos.y }
+        events.extend(ended.into_iter().map(|(i, reason)| {
+            let u = &self.units[i];
+            Event::MoveEnded { unit: u.id, reason, x: u.pos.x, y: u.pos.y }
+        }));
+        events
+    }
+
+    fn index_of(&self, id: u32) -> Option<usize> {
+        self.units.binary_search_by_key(&id, |u| u.id).ok()
+    }
+
+    /// Send unit `i` towards a point, sharing the flow field for its type and the goal cell.
+    fn set_goal(&mut self, i: usize, x: i32, y: i32) {
+        let goal = self.onto_map(x, y);
+        let kind = self.units[i].kind;
+        let cell = cell_of(&self.map, goal);
+        let (map, types) = (&self.map, &self.types);
+        self.fields.entry((kind, cell)).or_insert_with(|| FlowField::build(map, &types[kind].movement, cell));
+        self.units[i].goal = Some(goal);
+        self.units[i].rest = None;
+    }
+
+    /// Every unit attacking something, in id order, reloads, then fires if it can or closes in if it cannot.
+    fn fire(&mut self, events: &mut Vec<Event>) {
+        for i in 0..self.units.len() {
+            let unit = &mut self.units[i];
+            unit.cooldown = (unit.cooldown - 1).max(0);
+            let Some(weapon) = self.types[unit.kind].weapon.clone() else {
+                unit.target = None;
+                continue;
+            };
+            if unit.target.is_none() && unit.goal.is_none() && (self.tick + unit.id).is_multiple_of(SCAN_EVERY) {
+                let found = self.acquire(i, &weapon);
+                let unit = &mut self.units[i];
+                (unit.target, unit.chase) = (found, false);
+            }
+            let unit = &self.units[i];
+            let Some(target) = unit.target else { continue };
+            let Some(t) = self.index_of(target) else {
+                // The target is gone: the attack is over, and so is any chase.
+                let unit = &mut self.units[i];
+                if unit.chase {
+                    unit.goal = None;
+                }
+                (unit.target, unit.chase) = (None, false);
+                continue;
+            };
+            let (muzzle, middle, in_range, in_sight) = self.aim(i, t, &weapon);
+            let (me, them) = (&self.units[i], &self.units[t]);
+            if !(in_range && in_sight) && !me.chase {
+                // A target picked by the unit itself is dropped once it slips out of range or sight; only an
+                // ordered attack gives chase.
+                self.units[i].target = None;
+                continue;
+            }
+            if !(in_range && in_sight) {
+                // Close in, re-aiming the chase whenever the target moves to another cell. If the target cannot be
+                // reached, hold and keep watching rather than ordering a hopeless move every tick.
+                let target_cell = cell_of(&self.map, (them.pos.x, them.pos.y));
+                if me.goal.map(|g| cell_of(&self.map, g)) != Some(target_cell) {
+                    let (x, y, here) = (them.pos.x, them.pos.y, cell_of(&self.map, (me.pos.x, me.pos.y)));
+                    let kind = me.kind;
+                    let (map, types) = (&self.map, &self.types);
+                    let field = self
+                        .fields
+                        .entry((kind, target_cell))
+                        .or_insert_with(|| FlowField::build(map, &types[kind].movement, target_cell));
+                    if field.cost(here).is_some() {
+                        self.set_goal(i, x, y);
+                    } else {
+                        self.units[i].goal = None;
+                    }
+                }
+                continue;
+            }
+            let me = &mut self.units[i];
+            me.goal = None;
+            me.rest = None;
+            if me.cooldown > 0 {
+                continue;
+            }
+            me.cooldown = weapon.reload;
+            let (shooter, owner, kind) = (me.id, me.owner, me.kind);
+            let aim = self.scatter(middle, weapon.scatter);
+            let id = self.next_id;
+            self.next_id += 1;
+            self.projectiles.push(Projectile::launch(id, (shooter, owner), kind, &weapon, muzzle, aim));
+            events.push(Event::Fired { unit: shooter, projectile: id, from: muzzle, aim });
+        }
+    }
+
+    /// Where unit `i` would fire from and aim at to hit unit `t`, and whether the target is in range and in
+    /// sight. Direct fire needs a clear line to the target's middle, judged by flying the shot through the
+    /// terrain exactly as it will fly; lobbed shots are fired regardless and may hit a hill.
+    fn aim(&self, i: usize, t: usize, weapon: &Weapon) -> (Vec3, Vec3, bool, bool) {
+        let (me, them) = (&self.units[i], &self.units[t]);
+        let muzzle = Vec3::new(me.pos.x, me.pos.y, me.pos.z + self.types[me.kind].height);
+        let middle = Vec3::new(them.pos.x, them.pos.y, them.pos.z + self.types[them.kind].height / 2);
+        let in_range = i64::from(muzzle.ground_distance(middle)) <= i64::from(weapon.range);
+        let in_sight = in_range
+            && (weapon.gravity > 0
+                || self.clear_shot(&Projectile::launch(0, (me.id, me.owner), me.kind, weapon, muzzle, middle)));
+        (muzzle, middle, in_range, in_sight)
+    }
+
+    /// The enemy an idle unit picks for itself: the nearest unit of another owner that is in range and, for
+    /// direct fire, in sight, ties going to the lower id. Only the nearest few in range are tried for sight.
+    fn acquire(&self, i: usize, weapon: &Weapon) -> Option<u32> {
+        let me = &self.units[i];
+        let reach = i64::from(weapon.range);
+        let mut near: Vec<(i64, u32, usize)> = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.owner != me.owner)
+            .filter_map(|(t, u)| {
+                let (dx, dy) = (i64::from(u.pos.x - me.pos.x), i64::from(u.pos.y - me.pos.y));
+                let d2 = dx * dx + dy * dy;
+                (d2 <= reach * reach).then_some((d2, u.id, t))
             })
-            .collect()
+            .collect();
+        near.sort_unstable();
+        near.into_iter().take(SIGHT_TRIES).find(|&(_, _, t)| self.aim(i, t, weapon).3).map(|(_, id, _)| id)
+    }
+
+    /// The aim point moved by a random offset within `radius` on the ground. Offsets are drawn in a square and
+    /// redrawn until one lies in the circle, up to four draws, then no offset.
+    fn scatter(&mut self, aim: Vec3, radius: i32) -> Vec3 {
+        if radius == 0 {
+            return aim;
+        }
+        let span = (2 * radius + 1) as u32;
+        for _ in 0..4 {
+            let dx = random_int(&mut self.rng, span) as i32 - radius;
+            let dy = random_int(&mut self.rng, span) as i32 - radius;
+            if i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy) <= i64::from(radius) * i64::from(radius) {
+                return Vec3::new(aim.x + dx, aim.y + dy, aim.z);
+            }
+        }
+        aim
+    }
+
+    /// Fly every projectile one tick, in id order. Each is checked along its path, a few times a cell, against
+    /// the ground and against every unit but its firer; the first thing it meets stops it. One that leaves the
+    /// map, or flies on four times its planned flight without meeting anything, is gone.
+    fn fly(&mut self, events: &mut Vec<Event>, damage: &mut Vec<Hurt>) {
+        let mut flying = std::mem::take(&mut self.projectiles);
+        flying.retain_mut(|p| {
+            let before = p.at(p.flown);
+            p.flown += 1;
+            match self.contact(p.firer, before, p.at(p.flown), true) {
+                Contact::Clear => p.flown < 4 * p.flight,
+                Contact::OffMap => false,
+                Contact::Struck(at, unit) => {
+                    events.push(Event::Impact { projectile: p.id, at, unit });
+                    self.blast(p, at, unit, damage);
+                    false
+                }
+            }
+        });
+        self.projectiles = flying;
+    }
+
+    /// What a projectile meets first on its way from `before` to `after`, checked every `CHECK_EVERY` sub-cell
+    /// units: the edge of the map, a unit other than `firer` (only when `units` is set), or the ground.
+    fn contact(&self, firer: u32, before: Vec3, after: Vec3, units: bool) -> Contact {
+        let steps = (before.ground_distance(after) as i32 / CHECK_EVERY + 1).max(1);
+        for k in 1..=steps {
+            let at = before.lerp(after, k, steps);
+            if self.onto_map(at.x, at.y) != (at.x, at.y) {
+                return Contact::OffMap;
+            }
+            if units
+                && let Some(u) = self.units.iter().find(|u| {
+                    let t = &self.types[u.kind];
+                    let r = i64::from(t.movement.radius);
+                    let (dx, dy) = (i64::from(at.x - u.pos.x), i64::from(at.y - u.pos.y));
+                    u.id != firer && dx * dx + dy * dy <= r * r && (u.pos.z..=u.pos.z + t.height).contains(&at.z)
+                })
+            {
+                return Contact::Struck(at, Some(u.id));
+            }
+            let ground = self.map.sample(at.x, at.y);
+            if at.z <= ground {
+                return Contact::Struck(Vec3::new(at.x, at.y, ground), None);
+            }
+        }
+        Contact::Clear
+    }
+
+    /// Whether a shot's whole planned flight stays clear of the ground, checked exactly as its flight will be.
+    fn clear_shot(&self, p: &Projectile) -> bool {
+        (0..p.flight).all(|t| matches!(self.contact(p.firer, p.at(t), p.at(t + 1), false), Contact::Clear))
+    }
+
+    /// The damage a projectile bursting at `at` deals: full to a unit it struck, then full to units whose
+    /// centre is within half its splash and half to those within all of it, never to its firer. The firer's own
+    /// side takes `FRIENDLY_SPLASH_PERCENT` of splash, so supporting fire is risky but not ruinous. Splash reaches
+    /// units whose middle is within the splash distance above or below the burst, so a shell bursting on the
+    /// ground does not hurt aircraft overhead.
+    fn blast(&self, p: &Projectile, at: Vec3, struck: Option<u32>, damage: &mut Vec<Hurt>) {
+        let Some(weapon) = &self.types[p.kind].weapon else { return };
+        if let Some(id) = struck {
+            damage.push(Hurt { unit: id, by: p.firer, amount: weapon.damage });
+        }
+        let splash = i64::from(weapon.splash);
+        if splash == 0 {
+            return;
+        }
+        for u in &self.units {
+            if u.id == p.firer || Some(u.id) == struck {
+                continue;
+            }
+            let middle = u.pos.z + self.types[u.kind].height / 2;
+            let (dx, dy) = (i64::from(u.pos.x - at.x), i64::from(u.pos.y - at.y));
+            let d2 = dx * dx + dy * dy;
+            if i64::from(middle - at.z).abs() > splash || d2 > splash * splash {
+                continue;
+            }
+            let mut amount = if 4 * d2 <= splash * splash { weapon.damage } else { weapon.damage / 2 };
+            if u.owner == p.owner {
+                amount = amount * FRIENDLY_SPLASH_PERCENT / 100;
+            }
+            damage.push(Hurt { unit: u.id, by: p.firer, amount });
+        }
+    }
+
+    /// Apply damage in the order it was dealt, then remove the destroyed in id order.
+    fn hurt(&mut self, events: &mut Vec<Event>, damage: Vec<Hurt>) {
+        let mut killer = BTreeMap::new();
+        for h in damage {
+            let Some(i) = self.index_of(h.unit) else { continue };
+            let u = &mut self.units[i];
+            if u.health <= 0 || h.amount == 0 {
+                continue;
+            }
+            u.health -= h.amount;
+            events.push(Event::Damaged { unit: u.id, by: h.by, damage: h.amount, health: u.health });
+            if u.health <= 0 {
+                killer.insert(u.id, h.by);
+            }
+        }
+        for u in &self.units {
+            if let Some(&by) = killer.get(&u.id) {
+                events.push(Event::Destroyed { unit: u.id, by, at: u.pos });
+            }
+        }
+        self.units.retain(|u| u.health > 0);
     }
 
     /// The indices of units by the cell they stand in, each list in id order.
@@ -186,13 +537,13 @@ impl World {
         let (w, h) = (self.map.width(), self.map.height());
         let mut pairs = Vec::new();
         for (i, a) in self.units.iter().enumerate() {
-            let ca = &self.classes[a.class];
+            let ca = &self.types[a.kind].movement;
             let (cx, cy) = cell_of(&self.map, (a.pos.x, a.pos.y));
             for ny in (cy - 1).max(0)..=(cy + 1).min(h - 1) {
                 for nx in (cx - 1).max(0)..=(cx + 1).min(w - 1) {
                     for &j in &buckets[(ny * w + nx) as usize] {
                         let b = &self.units[j];
-                        let cb = &self.classes[b.class];
+                        let cb = &self.types[b.kind].movement;
                         if j <= i || (ca.altitude > 0) != (cb.altitude > 0) {
                             continue;
                         }
@@ -217,7 +568,7 @@ impl World {
             let (a, b) = (&self.units[i], &self.units[j]);
             let (mut dx, mut dy) = (i64::from(b.pos.x - a.pos.x), i64::from(b.pos.y - a.pos.y));
             let d = isqrt((dx * dx + dy * dy) as u64) as i64;
-            let reach = i64::from(self.classes[a.class].radius + self.classes[b.class].radius);
+            let reach = i64::from(self.types[a.kind].movement.radius + self.types[b.kind].movement.radius);
             let overlap = reach - d;
             let mut dist = d;
             if d == 0 {
@@ -249,7 +600,7 @@ impl World {
                 continue;
             }
             let u = &self.units[i];
-            let class = &self.classes[u.class];
+            let class = &self.types[u.kind].movement;
             let to = self.onto_map((i64::from(u.pos.x) + px) as i32, (i64::from(u.pos.y) + py) as i32);
             if can_step(&self.map, class, cell_of(&self.map, (u.pos.x, u.pos.y)), cell_of(&self.map, to)) {
                 let z = self.map.sample(to.0, to.1) + class.altitude;
@@ -280,8 +631,8 @@ impl World {
                     }
                     // A crowd of n discs of radius r fits well inside (2 * sqrt(n) + 1) * r of its centre.
                     let crowd = resting[&goal];
-                    let reach =
-                        i64::from(self.classes[self.units[m].class].radius) * (2 * isqrt(crowd as u64) as i64 + 1);
+                    let reach = i64::from(self.types[self.units[m].kind].movement.radius)
+                        * (2 * isqrt(crowd as u64) as i64 + 1);
                     let (dx, dy) = (i64::from(self.units[m].pos.x - goal.0), i64::from(self.units[m].pos.y - goal.1));
                     if dx * dx + dy * dy <= reach * reach {
                         self.units[m].goal = None;
@@ -299,19 +650,22 @@ impl World {
     fn apply(&mut self, command: Command) {
         match command {
             Command::Move { unit, x, y } => {
-                let goal = self.onto_map(x, y);
-                let Ok(i) = self.units.binary_search_by_key(&unit, |u| u.id) else { return };
-                let class = self.units[i].class;
-                let cell = cell_of(&self.map, goal);
-                let (map, classes) = (&self.map, &self.classes);
-                self.fields.entry((class, cell)).or_insert_with(|| FlowField::build(map, &classes[class], cell));
-                self.units[i].goal = Some(goal);
-                self.units[i].rest = None;
+                let Some(i) = self.index_of(unit) else { return };
+                (self.units[i].target, self.units[i].chase) = (None, false);
+                self.set_goal(i, x, y);
             }
             Command::Stop { unit } => {
-                if let Ok(i) = self.units.binary_search_by_key(&unit, |u| u.id) {
-                    self.units[i].goal = None;
-                    self.units[i].rest = None;
+                if let Some(i) = self.index_of(unit) {
+                    let u = &mut self.units[i];
+                    (u.goal, u.rest, u.target, u.chase) = (None, None, None, false);
+                }
+            }
+            Command::Attack { unit, target } => {
+                if let Some(i) = self.index_of(unit)
+                    && unit != target
+                    && self.types[self.units[i].kind].weapon.is_some()
+                {
+                    (self.units[i].target, self.units[i].chase) = (Some(target), true);
                 }
             }
         }
@@ -329,11 +683,41 @@ impl Canon for World {
         w.object()
             .field("map", &self.map)
             .field("nextId", &self.next_id)
+            .array("projectiles", &self.projectiles)
+            .field("rng", &self.rng)
             .field("tick", &self.tick)
             .array("units", &self.units)
             .end();
     }
 }
+
+/// One damage record: who is hurt, by whom, and how much.
+struct Hurt {
+    unit: u32,
+    by: u32,
+    amount: i32,
+}
+
+/// The share of splash damage a unit takes from its own side's shots, in percent.
+const FRIENDLY_SPLASH_PERCENT: i32 = 50;
+
+/// Idle armed units look for an enemy once every this many ticks, staggered by id.
+const SCAN_EVERY: u32 = 8;
+
+/// How many of the nearest enemies in range an idle unit tests for a clear shot when picking a target.
+const SIGHT_TRIES: usize = 4;
+
+/// What a projectile meets on one stretch of its flight.
+enum Contact {
+    Clear,
+    OffMap,
+    /// It bursts here, on a unit or (when `None`) on the ground.
+    Struck(Vec3, Option<u32>),
+}
+
+/// Projectiles are checked against the ground and units at least this often along their path, in sub-cell
+/// units.
+const CHECK_EVERY: i32 = 32;
 
 /// How close, beyond touching, a moving unit must come to a resting one to stop beside it.
 const CONTACT: i32 = 8;

@@ -8,4 +8,5 @@
 pub mod movement;
 pub mod space;
 pub mod terrain;
+pub mod weapon;
 pub mod world;
