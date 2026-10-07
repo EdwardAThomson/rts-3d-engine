@@ -3,7 +3,7 @@ use sim3d::movement::MoveClass;
 use sim3d::space::{SUB, Vec3};
 use sim3d::terrain::Heightmap;
 use sim3d::weapon::Weapon;
-use sim3d::world::{Command, Event, UnitType, World};
+use sim3d::world::{Command, Event, MoveEnd, UnitType, World};
 
 const TANK: usize = 0;
 const HIGH_LOB: usize = 1;
@@ -408,4 +408,76 @@ fn units_never_pick_a_target_their_weapon_cannot_hurt() {
     world.command(Command::Attack { unit: gun, target: immune });
     run(&mut world, 60);
     assert_eq!(world.unit(immune).unwrap().health, 100);
+}
+
+/// A 24 by 5 map with a tank on the west edge and an unarmed enemy off to the side of its road east, out of
+/// range at the start.
+fn roadside() -> (World, u32, u32) {
+    let mut world = World::new(Heightmap::flat(24, 5, 0), types(), 1);
+    let tank = spawn(&mut world, TANK, centre(1, 2));
+    let (x, y) = centre(14, 4);
+    let enemy = world.spawn_for(1, TARGET, x, y);
+    (world, tank, enemy)
+}
+
+#[test]
+fn an_attack_move_stops_to_destroy_an_enemy_on_the_way_then_drives_on() {
+    let goal = centre(22, 2);
+    let (mut plain, tank, enemy) = roadside();
+    plain.command(Command::Move { unit: tank, x: goal.0, y: goal.1 });
+    let events = run(&mut plain, 300);
+    assert!(!events.iter().any(|(_, e)| matches!(e, Event::Fired { .. })), "a plain move ignores enemies");
+    assert_eq!(plain.unit(enemy).unwrap().health, 100);
+
+    let (mut world, tank, enemy) = roadside();
+    world.command(Command::AttackMove { unit: tank, x: goal.0, y: goal.1 });
+    let mut fired = Vec::new();
+    let mut held = Vec::new();
+    let (mut destroyed, mut arrived) = (None, None);
+    for _ in 0..400 {
+        let tick = world.tick();
+        for e in world.step() {
+            match e {
+                Event::Fired { unit, .. } if unit == tank => fired.push(tick),
+                Event::Destroyed { unit, by, .. } if unit == enemy => destroyed = Some((tick, by)),
+                Event::MoveEnded { unit, reason, x, y } if unit == tank => arrived = Some((tick, reason, x, y)),
+                _ => {}
+            }
+        }
+        if !fired.is_empty() && destroyed.is_none() {
+            held.push(world.unit(tank).unwrap().pos);
+        }
+    }
+    // Four shots of 25 destroy it. Each takes 14 ticks to land and the cannon reloads in 10, so a fifth is
+    // already on its way when the fourth strikes.
+    assert_eq!(fired, vec![47, 57, 67, 77, 87]);
+    assert!(fired[0] > 0, "the enemy was out of range at the start");
+    assert_eq!(destroyed.map(|(_, by)| by), Some(tank));
+    assert!(held.windows(2).all(|w| w[0] == w[1]), "the tank stood still while it fought");
+    let (tick, reason, x, y) = arrived.expect("the tank drove on and arrived");
+    assert_eq!((reason, (x, y)), (MoveEnd::Arrived, goal));
+    assert!(tick > destroyed.unwrap().0, "it arrived after the fight");
+    let unit = world.unit(tank).unwrap();
+    assert!(!unit.hunt && unit.goal.is_none(), "the attack-move is over");
+}
+
+#[test]
+fn a_replay_of_an_attack_move_matches() {
+    let (mut live, tank, _) = roadside();
+    live.command(Command::AttackMove { unit: tank, x: centre(22, 2).0, y: centre(22, 2).1 });
+    let mut hashes = Vec::new();
+    for _ in 0..200 {
+        live.step();
+        hashes.push(hash_of(&live).value());
+    }
+    let (mut replay, _, _) = roadside();
+    let log = live.command_log().to_vec();
+    for (i, expected) in hashes.iter().enumerate() {
+        let tick = replay.tick();
+        for logged in log.iter().filter(|l| l.tick == tick) {
+            replay.command(logged.command.clone());
+        }
+        replay.step();
+        assert_eq!(hash_of(&replay).value(), *expected, "replay diverged at tick {i}");
+    }
 }
