@@ -49,6 +49,8 @@ pub struct Renderer {
     /// Rectangles drawn over the scene until changed, and their buffer.
     overlay: Vec<Rect>,
     flats: Option<wgpu::Buffer>,
+    /// The part of the target the scene fills, from its top left, when it leaves room for a panel; see `set_area`.
+    area: Option<(u32, u32)>,
 }
 
 impl Renderer {
@@ -197,6 +199,7 @@ impl Renderer {
             depth: None,
             overlay: Vec::new(),
             flats: None,
+            area: None,
         }
     }
 
@@ -210,8 +213,15 @@ impl Renderer {
         self.overlay = rects.to_vec();
     }
 
+    /// Draw the scene into only the `width` by `height` pixels at the target's top left from now on, over what is
+    /// already there (the sky included), so a panel drawn beside it first is kept; `None` fills and clears the
+    /// whole target again.
+    pub fn set_area(&mut self, area: Option<(u32, u32)>) {
+        self.area = area;
+    }
+
     /// Draw the terrain of `world` and `shapes` on it, seen by `camera`, into `target` (`width` by `height`
-    /// pixels) over `sky`.
+    /// pixels) over `sky`, or into the area `set_area` gave.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -224,6 +234,8 @@ impl Renderer {
         sky: [u8; 3],
     ) {
         let map = world.map();
+        let (target_size, area) = ((width, height), self.area);
+        let (width, height) = area.map_or((width, height), |(w, h)| (w.clamp(1, width), h.clamp(1, height)));
         let mut globals = Vec::with_capacity(80);
         for column in camera.view_proj(map, width as f32 / height as f32) {
             for f in column {
@@ -261,10 +273,11 @@ impl Renderer {
         if !self.overlay.is_empty() {
             self.upload_overlay(gpu, (width as f32, height as f32));
         }
-        if self.depth.as_ref().is_none_or(|d| (d.0, d.1) != (width, height)) {
+        let (tw, th) = target_size;
+        if self.depth.as_ref().is_none_or(|d| (d.0, d.1) != (tw, th)) {
             let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("depth"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -272,7 +285,7 @@ impl Renderer {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             });
-            self.depth = Some((width, height, texture.create_view(&Default::default())));
+            self.depth = Some((tw, th, texture.create_view(&Default::default())));
         }
         let mesh = self.meshes.iter().find(|m| m.step == step).expect("made above");
         let depth = &self.depth.as_ref().expect("made above").2;
@@ -286,7 +299,12 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: c(sky[0]), g: c(sky[1]), b: c(sky[2]), a: 1.0 }),
+                        load: match area {
+                            Some(_) => wgpu::LoadOp::Load,
+                            None => {
+                                wgpu::LoadOp::Clear(wgpu::Color { r: c(sky[0]), g: c(sky[1]), b: c(sky[2]), a: 1.0 })
+                            }
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -299,6 +317,10 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if area.is_some() {
+                pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                pass.set_scissor_rect(0, 0, width, height);
+            }
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_pipeline(&self.terrain_pipeline);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -378,57 +400,64 @@ impl Renderer {
         shapes: &[Shape],
         sky: [u8; 3],
     ) -> Vec<u8> {
-        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("image"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: OFFSCREEN_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (texture, view) = offscreen(gpu, (width, height));
         self.draw(gpu, &view, (width, height), world, camera, shapes, sky);
-        // Rows in a copy are padded to a multiple of 256 bytes.
-        let row = (width * 4).div_ceil(256) * 256;
-        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (row * height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("copy") });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(height),
-                },
-            },
-            size,
-        );
-        gpu.queue.submit([encoder.finish()]);
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("readback maps"));
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("GPU finishes");
-        let data = slice.get_mapped_range().expect("readback is mapped");
-        let mut out = Vec::with_capacity((width * height * 4) as usize);
-        for y in 0..height {
-            let start = (y * row) as usize;
-            out.extend_from_slice(&data[start..start + (width * 4) as usize]);
-        }
-        out
+        read_back(gpu, &texture)
     }
+}
+
+/// A new `width` by `height` image to draw into offscreen, in `OFFSCREEN_FORMAT`, and a view of it.
+pub fn offscreen(gpu: &Gpu, (width, height): (u32, u32)) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("image"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: OFFSCREEN_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+/// An offscreen image's RGBA pixels, rows top to bottom, once everything drawn into it has finished.
+pub fn read_back(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u8> {
+    let (width, height) = (texture.width(), texture.height());
+    // Rows in a copy are padded to a multiple of 256 bytes.
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (row * height) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("copy") });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+        },
+        texture.size(),
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |r| r.expect("readback maps"));
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("GPU finishes");
+    let data = slice.get_mapped_range().expect("readback is mapped");
+    let mut out = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        let start = (y * row) as usize;
+        out.extend_from_slice(&data[start..start + (width * 4) as usize]);
+    }
+    out
 }
 
 /// A buffer holding `bytes`.

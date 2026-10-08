@@ -6,6 +6,8 @@
 //!   its own. Units, structures and frames, projectiles, wrecks and resource spots each get a box.
 //! - `model`: the art studio's models read from glTF files, and where each is drawn over its unit's shape. `json`
 //!   reads their headers.
+//! - `panel`: the side panel: a minimap, the side's stock, buttons for what the selection builds, and placing a
+//!   structure; drawn with the platform's sprite batch beside the scene.
 //! - `renderer`: the GPU side: the terrain mesh from `view3d`, the boxes as instances of one cube, depth, and simple
 //!   sunlight, and flat rectangles over it all for the drag box.
 
@@ -13,6 +15,7 @@ pub mod control;
 pub mod json;
 pub mod model;
 mod model_gpu;
+pub mod panel;
 pub mod renderer;
 pub mod shapes;
 

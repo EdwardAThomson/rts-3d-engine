@@ -1,6 +1,8 @@
 //! Playing one side with the mouse: click or drag a box to select your units, right-click to send them. Right-click
-//! an enemy to attack it, the ground to move there, or with attack-move held, to fight along the way. Worked out
-//! from the world, the camera and the shapes on screen with no GPU, so it is tested on its own.
+//! an enemy to attack it, the ground to move there, or with attack-move held, to fight along the way. Builders
+//! right-clicked onto a frame of yours help build it, and onto a wreck reclaim it. A click also selects one of your
+//! structures, so the panel can show what it builds (see `panel`). Worked out from the world, the camera and the
+//! shapes on screen with no GPU, so it is tested on its own.
 //!
 //! The person shares their side with a computer helper that runs the base and the factories. A unit the person has
 //! given an order to is theirs from then on: `allows` drops the helper's orders for it. The idea of a helper for
@@ -81,8 +83,8 @@ impl Control {
         (r[2] - r[0] >= CLICK || r[3] - r[1] >= CLICK).then_some(r)
     }
 
-    /// The left button came up at `(x, y)`: a click selects the unit of yours under it, a drag every unit of yours
-    /// inside the box. With `add` (shift held) they join the selection instead of replacing it, and clicking a
+    /// The left button came up at `(x, y)`: a click selects the unit or structure of yours under it, a drag every
+    /// mobile unit of yours inside the box. With `add` (shift held) they join the selection instead of replacing it, and clicking a
     /// selected unit drops it.
     pub fn release(
         &mut self,
@@ -119,7 +121,7 @@ impl Control {
             }
             None => {
                 let ray = camera.ray(at.0, at.1, screen.width, screen.height);
-                if let Some(id) = under(world, shapes, &ray).filter(|&id| self.commandable(world, id))
+                if let Some(id) = under(world, shapes, &ray).filter(|&id| self.owns(world, id))
                     && !self.selected.remove(&id)
                 {
                     self.selected.insert(id);
@@ -128,8 +130,9 @@ impl Control {
         }
     }
 
-    /// The right button was clicked at `(x, y)`: orders for every selected unit. On an enemy, attack it; on the
-    /// ground, move there, or attack-move with `fight`. The ordered units become the person's.
+    /// The right button was clicked at `(x, y)`: orders for every selected mobile unit. On an enemy, attack it; on
+    /// the ground, move there, or attack-move with `fight`. On a frame of yours, builders help build it, and on a
+    /// wreck they reclaim it; anything else selected stays put. The ordered units become the person's.
     pub fn order(
         &mut self,
         world: &World,
@@ -141,6 +144,21 @@ impl Control {
     ) -> Vec<Command> {
         self.tidy(world);
         let ray = camera.ray(at.0, at.1, screen.width, screen.height);
+        let movers: Vec<u32> = self.selected.iter().copied().filter(|&id| self.commandable(world, id)).collect();
+        let builds = |id: u32| world.unit(id).is_some_and(|u| world.types()[u.kind].production.build_power > 0);
+        // A frame of yours or a wreck under the cursor is work for the builders.
+        let work = match under_part(world, shapes, &ray) {
+            Some(Part::Frame(f)) if world.unit(f).is_some_and(|u| u.owner == self.player) => {
+                Some(Box::new(move |unit| Command::Assist { unit, target: f }) as Box<dyn Fn(u32) -> Command>)
+            }
+            Some(Part::Wreck(w)) => Some(Box::new(move |unit| Command::Reclaim { unit, wreck: w }) as _),
+            _ => None,
+        };
+        if let Some(work) = work {
+            let builders: Vec<u32> = movers.into_iter().filter(|&id| builds(id)).collect();
+            self.claimed.extend(&builders);
+            return builders.into_iter().map(work).collect();
+        }
         let enemy = under(world, shapes, &ray).filter(|&id| world.unit(id).is_some_and(|u| u.owner != self.player));
         let goal = match enemy {
             Some(_) => None,
@@ -150,7 +168,7 @@ impl Control {
             },
         };
         let mut out = Vec::new();
-        for &unit in &self.selected {
+        for unit in movers {
             out.push(match (enemy, goal) {
                 (Some(target), _) => Command::Attack { unit, target },
                 (None, Some((x, y))) if fight => Command::AttackMove { unit, x, y },
@@ -175,9 +193,14 @@ impl Control {
             .collect()
     }
 
-    /// Whether `id` is a unit of this player's that can take orders: alive, and not a structure.
-    fn commandable(&self, world: &World, id: u32) -> bool {
+    /// Whether `id` is a unit of this player's that can take orders to go somewhere: alive, and not a structure.
+    pub fn commandable(&self, world: &World, id: u32) -> bool {
         world.unit(id).is_some_and(|u| u.owner == self.player && world.types()[u.kind].structure.is_none())
+    }
+
+    /// Whether `id` is a unit or structure of this player's.
+    fn owns(&self, world: &World, id: u32) -> bool {
+        world.unit(id).is_some_and(|u| u.owner == self.player)
     }
 }
 
@@ -196,16 +219,30 @@ pub fn outline([x0, y0, x1, y1]: [f32; 4], width: f32) -> Vec<Rect> {
 
 /// The unit or frame nearest the camera along `ray`, unless the ground hides it.
 pub fn under(world: &World, shapes: &[Shape], ray: &Ray) -> Option<u32> {
-    let (t, id) = shapes
+    match nearest(world, shapes, ray, false)? {
+        Part::Unit(id) | Part::Frame(id) => Some(id),
+        _ => None,
+    }
+}
+
+/// The unit, frame or wreck nearest the camera along `ray`, unless the ground hides it.
+pub fn under_part(world: &World, shapes: &[Shape], ray: &Ray) -> Option<Part> {
+    nearest(world, shapes, ray, true)
+}
+
+fn nearest(world: &World, shapes: &[Shape], ray: &Ray, wrecks: bool) -> Option<Part> {
+    let (t, part) = shapes
         .iter()
-        .filter_map(|s| match s.part {
-            Part::Unit(id) | Part::Frame(id) => hit(ray, s.min, s.max).map(|t| (t, id)),
-            _ => None,
+        .filter(|s| match s.part {
+            Part::Unit(_) | Part::Frame(_) => true,
+            Part::Wreck(_) => wrecks,
+            _ => false,
         })
+        .filter_map(|s| hit(ray, s.min, s.max).map(|t| (t, s.part)))
         .min_by(|a, b| a.0.total_cmp(&b.0))?;
     // A hill between the camera and the box hides it.
     let ground = ground_hit(world.map(), ray).map(|p| distance(ray, p));
-    ground.is_none_or(|g| t <= g + 0.01).then_some(id)
+    ground.is_none_or(|g| t <= g + 0.01).then_some(part)
 }
 
 /// Where `ray` first enters the box from `min` to `max`, in multiples of its direction, if it does.

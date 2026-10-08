@@ -25,6 +25,8 @@ pub const KINDS: [&str; 6] = ["builder", "generator", "extractor", "factory", "t
 /// Resources, by index into a store.
 pub const ORE: usize = 0;
 pub const POWER: usize = 1;
+/// Each resource's name, by index, for the panel's readout.
+pub const RESOURCES: [&str; 2] = ["ore", "power"];
 
 /// Map size in cells.
 pub const SIZE: i32 = 64;

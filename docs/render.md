@@ -39,7 +39,21 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    or frame box it enters, unless the ground (by `view3d::pick`, on the simulation's own heights) is nearer; a box
    selects every unit of yours whose middle projects inside it. Orders go in as ordinary commands in sub-cell
    units, so nothing new reaches replays or the state hash. A selected unit gets a pale plate under it, and the
-   drag box is flat rectangles drawn over the scene.
+   drag box is flat rectangles drawn over the scene. A click also selects one of your structures, but a box takes
+   only mobile units, and only mobile units take move and attack orders. Right-clicking a frame of yours sends the
+   selected builders to help build it, and a wreck, to reclaim it.
+8. **The panel sits beside the scene.** `panel` is a sidebar down the right, 260 pixels wide, drawn with the
+   sprite batch and pixel font from `rts-platform` first; the scene then fills the rest of the screen over it
+   (`Renderer::set_area`: a viewport, and the colour is loaded rather than cleared). Top to bottom: a minimap (the
+   ground shaded by height, spots, wrecks, every unit in its owner's colour, the camera's view as a dotted outline;
+   click or drag on it to look there), a line per resource with its store's fill and what it gained or lost a
+   second over the last two seconds (and a warning when spending outruns income), buttons for what the selection
+   can make, the helper's switch and the clock. A structure's button starts placing it: a green or red plate shows
+   where it would stand (`World::site_ok`), a click sends the nearest selected builder, shift places more, and a
+   right-click or Escape stops. A unit's button queues one in the selected factory with the shortest queue, shows
+   how many are queued and the first one's progress; a right-click empties those factories' queues. Factories and
+   builders you give orders to are yours, as in rule 7. The names on it come from the setting (`Names`); the
+   layout follows the classic 1990s sidebar. Like `control`, what a click does is worked out with no GPU.
 
 ## The viewer
 
@@ -51,11 +65,13 @@ You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) agains
 a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
 to attack it or the ground to move there, with Ctrl held to attack-move. A computer helper (an ordinary `ai3d`
 player) runs your base and factories and sends waves with the fighters you leave to it; once you give a unit an
-order it is yours alone, and the helper's orders for it are dropped. That lets you play before there is a HUD for
-building, an idea we take from Supreme Commander's and Total Annihilation's automation of the chores. `--watch 1`
+order it is yours alone, and the helper's orders for it are dropped, an idea we take from Supreme Commander's and
+Total Annihilation's automation of the chores. The panel on the right (rule 8) builds and produces; its switch
+turns the helper off, so the whole side is yours, and `--helper 0` (`?helper=0`) starts with it off. `--watch 1`
 (`?watch=1` in the browser) leaves every side to the computer, and `--boxes 1` draws boxes in place of the models.
 The wheel zooms at the cursor, arrow keys or WASD
-pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape quits.
+pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape stops
+placing a structure, or else quits.
 The game runs at 30 ticks a second of game time; that rate is the viewer's choice, since the simulation has no
 clock.
 
@@ -70,14 +86,14 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 
 `wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
-Space pauses, a drag selects, a right-click opens no browser menu and the wheel zooms.
+Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
+Escape stops it, the helper's switch turns it off, and the wheel zooms.
 
 ## Later
 
-- Building and production from a HUD, so the helper can be switched off; double-click to select every unit of a
-  kind on screen; control groups.
+- Double-click to select every unit of a kind on screen; control groups; rally points for factories.
 - Icons when zoomed far out; the detailed models close in.
 - Models for other settings, read from a setting pack instead of built into the program.
-- A HUD with the sprite batcher and font from `rts-platform`, and sound from its mixer.
+- Sound from `rts-platform`'s mixer.
 - Effects from `events`: muzzle flashes, impacts, wrecks burning.
 - Units tilted to the slope they stand on; today a level box sinks into a hillside.

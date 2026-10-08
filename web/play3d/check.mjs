@@ -35,13 +35,16 @@ function readWebGpuFrames() {
   GPUCanvasContext.prototype.getCurrentTexture = function () {
     const texture = current.call(this);
     window.frameTexture = { texture, device: this.device };
+    window.frameSubmits = 0;
     return texture;
   };
+  // A frame is two submits, the panel's and then the scene's; copy it once both are in.
   const submit = GPUQueue.prototype.submit;
   GPUQueue.prototype.submit = function (commands) {
     submit.call(this, commands);
+    window.frameSubmits = (window.frameSubmits ?? 0) + 1;
     const f = window.frameTexture;
-    if (!f || !window.wantFrame) return;
+    if (!f || !window.wantFrame || window.frameSubmits < 2) return;
     window.wantFrame = false;
     const { texture: t, device } = f;
     const row = Math.ceil((t.width * 4) / 256) * 256;
@@ -139,6 +142,14 @@ for (const run of runs) {
   await page.evaluate(() => window.addEventListener("contextmenu", (e) => (window.menuBlocked = e.defaultPrevented)));
   await page.mouse.click(480, 300, { button: "right" });
   const noMenu = await page.evaluate(() => window.menuBlocked === true);
+  // The panel at the right of the 960 by 600 page (260 pixels wide): the builder's first button, the generator,
+  // starts placing one and Escape stops; the switch at the foot turns the helper off.
+  await page.mouse.click(767, 343);
+  const placing = await titled(/placing generator/);
+  await page.keyboard.press("Escape");
+  const stopped = await titled(/^(?!.*placing)/);
+  await page.mouse.click(830, 530);
+  const helperOff = await titled(/helper off/);
   const shot = await frame(page, run);
   if (shot.png) writeFileSync(`${out}/play3d-${run.name}.png`, shot.png);
   // The wheel zooms in at the cursor: with the game paused, the next frame differs.
@@ -154,6 +165,9 @@ for (const run of runs) {
     "Space pauses": paused,
     "a drag selects": selected,
     "right-click gives no menu": noMenu,
+    "a panel button starts placing": placing,
+    "Escape stops placing": stopped,
+    "the panel turns the helper off": helperOff,
     "the wheel zooms": zoomed.colours >= 64 && zoomed.print !== shot.print,
     "no errors": errors.length === 0,
   };

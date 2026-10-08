@@ -32,6 +32,8 @@ pub enum Part {
     Wreck(u32),
     /// A resource spot, by cell.
     Spot(i32, i32),
+    /// Where a structure is about to be placed, by its north-west cell: drawn while placing it.
+    Site(i32, i32),
 }
 
 /// An axis-aligned box from `min` to `max` in view space.
