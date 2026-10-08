@@ -88,9 +88,8 @@ fn a_box_hides_behind_a_hill_seen_from_low_down() {
     let gpu = Gpu::headless().expect("a GPU adapter");
     // A ridge four cells high across the map at row 16, and a unit north of it, behind it from the south.
     let (w, h) = (32, 32);
-    let corners = (0..=h)
-        .flat_map(|cy: i32| (0..=w).map(move |_| if (cy - 16).abs() <= 1 { 4 * SUB } else { 0 }))
-        .collect();
+    let corners =
+        (0..=h).flat_map(|cy: i32| (0..=w).map(move |_| if (cy - 16).abs() <= 1 { 4 * SUB } else { 0 })).collect();
     let map = sim3d::terrain::Heightmap::new(w, h, corners);
     let mut world = World::new(map, skirmish::types(), 1);
     let unit = world.spawn_for(1, BUILDER, 16 * SUB, 12 * SUB);
