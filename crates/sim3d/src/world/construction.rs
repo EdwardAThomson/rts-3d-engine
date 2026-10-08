@@ -147,7 +147,7 @@ impl World {
         }
         let u = &mut self.units[i];
         (u.target, u.chase, u.hunt, u.assist, u.goal) = (None, false, false, None, None);
-        u.reclaim = None;
+        (u.reclaim, u.patrol) = (None, None);
         u.plan = Some((kind, cx, cy));
     }
 
@@ -159,7 +159,7 @@ impl World {
         }
         let u = &mut self.units[i];
         (u.target, u.chase, u.hunt, u.plan, u.goal) = (None, false, false, None, None);
-        u.reclaim = None;
+        (u.reclaim, u.patrol) = (None, None);
         u.assist = Some(target);
     }
 
@@ -171,7 +171,7 @@ impl World {
         }
         let u = &mut self.units[i];
         (u.target, u.chase, u.hunt, u.plan, u.assist, u.goal) = (None, false, false, None, None, None);
-        u.reclaim = Some(wreck);
+        (u.reclaim, u.patrol) = (Some(wreck), None);
     }
 
     fn wreck_index(&self, id: u32) -> Option<usize> {
