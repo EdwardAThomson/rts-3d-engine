@@ -17,8 +17,9 @@ const VERTEX: u64 = 24;
 /// Bytes per box: its two corners and a colour.
 const INSTANCE: u64 = 28;
 
-/// The direction towards the sun: low in the north-west, so hills facing south-east fall into shade.
-const SUN: [f32; 3] = [-0.45, -0.55, 0.7];
+/// The direction towards the sun: low in the west-north-west, so slopes facing away from it fall into shade and
+/// hills read as hills.
+const SUN: [f32; 3] = [-0.65, -0.4, 0.5];
 
 /// A terrain mesh on the GPU, at one level of detail.
 struct Mesh {

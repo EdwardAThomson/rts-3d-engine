@@ -10,7 +10,7 @@ that is not GPU code is in `crates/view3d`, so it is tested on its own and the r
 2. **View space is in cells.** `x` runs east and `y` south, as in the simulation, and `z` up. One cell of height
    is `HEIGHT_PER_CELL` height units, set equal to `SUB`, so slopes look as steep as the movement rules treat them.
 3. **Strategic zoom.** One zoom value runs from 0 (four cells from the focus) to 1 (the whole map on screen), with
-   the distance growing evenly in ratio. Close in, the camera looks 50 degrees below the horizon; as it pulls back
+   the distance growing evenly in ratio. Close in, the camera looks 40 degrees below the horizon; as it pulls back
    it tilts until, fully out, it looks straight down with north up, like a minimap. Supreme Commander's camera is
    the inspiration; the numbers are our own starting values.
 4. **Zoom at the cursor.** Zooming keeps the ground under the cursor where it is on screen, so a player zooms

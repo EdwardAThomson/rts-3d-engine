@@ -14,9 +14,9 @@ pub const FOV_Y: f32 = std::f32::consts::FRAC_PI_4;
 /// The closest the camera comes to the point it looks at, in cells.
 pub const MIN_DISTANCE: f32 = 4.0;
 
-/// How far below the horizon the camera looks when fully zoomed in, in radians (50 degrees). Fully zoomed out it
-/// looks straight down.
-pub const CLOSE_PITCH: f32 = 50.0 * std::f32::consts::PI / 180.0;
+/// How far below the horizon the camera looks when fully zoomed in, in radians (40 degrees), low enough that hills
+/// stand out against what is behind them. Fully zoomed out it looks straight down.
+pub const CLOSE_PITCH: f32 = 40.0 * std::f32::consts::PI / 180.0;
 
 /// How much one wheel step changes the zoom, out of the whole range from closest to the whole map.
 pub const ZOOM_STEP: f32 = 0.08;
