@@ -1,9 +1,7 @@
 # The view: camera, terrain mesh and picking
 
-Draft, 8 Oct 2026. Roadmap step 5 starts here. The wgpu renderer will sit on the platform layer shared with the
-Classic engine (window, input, GPU set-up, textures, text, audio), which still lives inside `rts-engine`'s
-renderer and moves to its own crate before this engine uses it. Everything a renderer needs that is not GPU code
-is in `crates/view3d` already, so it is tested now and the renderer only has to draw.
+Draft, 8 Oct 2026. Roadmap step 5 starts here. Everything the renderer (`crates/render3d`, docs/render.md) needs
+that is not GPU code is in `crates/view3d`, so it is tested on its own and the renderer only has to draw.
 
 ## Rules
 
@@ -27,8 +25,6 @@ is in `crates/view3d` already, so it is tested now and the renderer only has to 
 
 ## Later
 
-- The renderer itself: terrain, units and projectiles drawn from `events` and snapshots, interpolated between
-  ticks, on the shared platform layer.
 - Unit models from the art studio's glTF exports, with icons in place of models when zoomed far out.
 - Terrain in chunks, so far chunks use coarse detail and off-screen ones are skipped.
 - Picking units as well as ground; box selection.
