@@ -24,7 +24,7 @@
 //! The push-apart idea is the separation rule of Reynolds' boids ("Steering Behaviors For Autonomous
 //! Characters", 1999); the code is our own.
 
-use crate::economy::{Job, Production, Store, Structure, affordable, paid};
+use crate::economy::{Job, Production, Spot, Store, Structure, Wreck, affordable, paid, reclaim_time};
 use crate::movement::{FlowField, MoveClass, can_step};
 use crate::space::{SUB, Vec3};
 use crate::terrain::Heightmap;
@@ -62,6 +62,8 @@ pub enum Command {
     Build { unit: u32, kind: usize, cx: i32, cy: i32 },
     /// Help build a frame of the unit's own side, going next to it first.
     Assist { unit: u32, target: u32 },
+    /// Reclaim a wreck for resources, going next to it first.
+    Reclaim { unit: u32, wreck: u32 },
 }
 
 /// Why a move ended.
@@ -117,6 +119,16 @@ pub enum Event {
         by: u32,
         unit: u32,
     },
+    /// A destroyed unit left a wreck.
+    Wrecked {
+        unit: u32,
+        wreck: u32,
+    },
+    /// A builder finished reclaiming a wreck, which is gone.
+    Reclaimed {
+        by: u32,
+        wreck: u32,
+    },
 }
 
 /// A kind of unit, read from data.
@@ -170,6 +182,8 @@ pub struct Unit {
     pub assist: Option<u32>,
     /// A structure this builder is on its way to place: its type and its footprint's north-west cell.
     pub plan: Option<(usize, i32, i32)>,
+    /// The wreck this builder is reclaiming.
+    pub reclaim: Option<u32>,
 }
 
 impl Canon for Unit {
@@ -191,6 +205,7 @@ impl Canon for Unit {
             .opt("plan", plan.as_ref())
             .field("pos", &self.pos)
             .opt("queue", (!self.queue.is_empty()).then_some(&self.queue))
+            .opt("reclaim", self.reclaim.as_ref())
             .opt("rest", rest.as_ref())
             .opt("target", self.target.as_ref())
             .opt("work", (self.work != 0).then_some(&self.work))
@@ -209,6 +224,10 @@ pub struct World {
     next_id: u32,
     /// Each player's resources, in owner order. A player with no store has nothing to spend.
     stores: Vec<Store>,
+    /// Resource spots on the map, in the order they were added.
+    spots: Vec<Spot>,
+    /// Wrecks, in id order.
+    wrecks: Vec<Wreck>,
     /// The game's one random generator (scatter).
     rng: i32,
     tick: u32,
@@ -254,6 +273,8 @@ impl World {
             projectiles: Vec::new(),
             next_id: 1,
             stores: Vec::new(),
+            spots: Vec::new(),
+            wrecks: Vec::new(),
             rng: seed_state(seed),
             tick: 0,
             commands: CommandQueue::default(),
@@ -297,6 +318,20 @@ impl World {
             Ok(i) => self.stores[i] = store,
             Err(i) => self.stores.insert(i, store),
         }
+    }
+
+    /// Add a resource spot at cell `(cx, cy)`. Part of making the map, before the first tick.
+    pub fn add_spot(&mut self, cx: i32, cy: i32, resource: usize, rate: i64) {
+        assert!(rate >= 0, "a spot yields, never costs");
+        self.spots.push(Spot { cx, cy, resource, rate });
+    }
+
+    pub fn spots(&self) -> &[Spot] {
+        &self.spots
+    }
+
+    pub fn wrecks(&self) -> &[Wreck] {
+        &self.wrecks
     }
 
     pub fn command_log(&self) -> &[Logged<Command>] {
@@ -349,6 +384,7 @@ impl World {
             build: frame.then_some(0),
             assist: None,
             plan: None,
+            reclaim: None,
         });
         id
     }
@@ -383,7 +419,7 @@ impl World {
                     unit.rest = (reason == MoveEnd::Arrived).then_some(goal);
                     if reason == MoveEnd::Unreachable {
                         // A builder that cannot get to its site gives up on it.
-                        (unit.plan, unit.assist) = (None, None);
+                        (unit.plan, unit.assist, unit.reclaim) = (None, None, None);
                     }
                     ended.push((i, reason));
                 }
@@ -649,6 +685,14 @@ impl World {
         for u in &self.units {
             if let Some(&by) = killer.get(&u.id) {
                 events.push(Event::Destroyed { unit: u.id, by, at: u.pos });
+                // A finished unit worth something leaves a wreck; a frame leaves nothing.
+                if u.build.is_none() && !self.types[u.kind].production.wreck.is_empty() {
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    let pos = Vec3::new(u.pos.x, u.pos.y, self.map.sample(u.pos.x, u.pos.y));
+                    self.wrecks.push(Wreck { id, kind: u.kind, pos, work: 0 });
+                    events.push(Event::Wrecked { unit: u.id, wreck: id });
+                }
             }
         }
         let types = &self.types;
@@ -798,13 +842,26 @@ impl World {
     /// never taking more than is left. Finished units appear beside their factory; finished frames become whole.
     fn economy(&mut self, events: &mut Vec<Event>) {
         for u in self.units.iter().filter(|u| u.build.is_none()) {
-            let produces = &self.types[u.kind].production.produces;
-            if let Ok(s) = self.stores.binary_search_by_key(&u.owner, |s| s.owner) {
-                for (amount, &add) in self.stores[s].amount.iter_mut().zip(produces) {
-                    *amount += add;
+            let p = &self.types[u.kind].production;
+            let Ok(s) = self.stores.binary_search_by_key(&u.owner, |s| s.owner) else { continue };
+            let mut income = p.produces.clone();
+            if p.extracts
+                && let Some((x0, y0, x1, y1)) = self.footprint_cells(u.kind, u.pos.x, u.pos.y)
+            {
+                for spot in &self.spots {
+                    if (x0..x1).contains(&spot.cx) && (y0..y1).contains(&spot.cy) {
+                        if income.len() <= spot.resource {
+                            income.resize(spot.resource + 1, 0);
+                        }
+                        income[spot.resource] += spot.rate;
+                    }
                 }
             }
+            for (have, add) in self.stores[s].amount.iter_mut().zip(income) {
+                *have += add;
+            }
         }
+        self.reclaim(events);
         let mut asked = vec![Vec::new(); self.stores.len()];
         for (s, store) in self.stores.iter_mut().enumerate() {
             for (amount, &cap) in store.amount.iter_mut().zip(&store.capacity) {
@@ -895,6 +952,35 @@ impl World {
         }
     }
 
+    /// Every builder next to the wreck it is reclaiming, in id order, adds its build power to the reclaim work and
+    /// gains what that work frees, as `paid` reckons it, so a wreck yields exactly its worth. A wreck is gone once
+    /// all of it is reclaimed.
+    fn reclaim(&mut self, events: &mut Vec<Event>) {
+        for i in 0..self.units.len() {
+            let u = &self.units[i];
+            let power = self.types[u.kind].production.build_power;
+            let Some(id) = u.reclaim else { continue };
+            let Ok(w) = self.wrecks.binary_search_by_key(&id, |w| w.id) else { continue };
+            if power == 0 || !self.near_wreck(i, w) {
+                continue;
+            }
+            let wreck = &self.wrecks[w];
+            let worth = &self.types[wreck.kind].production;
+            let time = reclaim_time(worth.build_time);
+            let (from, to) = (wreck.work, (wreck.work + power).min(time));
+            if let Ok(s) = self.stores.binary_search_by_key(&u.owner, |s| s.owner) {
+                for (have, &value) in self.stores[s].amount.iter_mut().zip(&worth.wreck) {
+                    *have += paid(value, to, time) - paid(value, from, time);
+                }
+            }
+            self.wrecks[w].work = to;
+            if to == time {
+                self.wrecks.remove(w);
+                events.push(Event::Reclaimed { by: self.units[i].id, wreck: id });
+            }
+        }
+    }
+
     /// What unit `i` is building this tick, if anything: the first item in its queue, or the frame it is
     /// assisting if it is close enough.
     fn spender(&self, i: usize) -> Option<Spender> {
@@ -929,12 +1015,14 @@ impl World {
                 let Some(i) = self.index_of(unit) else { return };
                 let u = &mut self.units[i];
                 (u.target, u.chase, u.hunt, u.plan, u.assist) = (None, false, false, None, None);
+                u.reclaim = None;
                 self.set_goal(i, x, y);
             }
             Command::AttackMove { unit, x, y } => {
                 let Some(i) = self.index_of(unit) else { return };
                 let u = &mut self.units[i];
                 (u.target, u.chase, u.hunt, u.plan, u.assist) = (None, false, true, None, None);
+                u.reclaim = None;
                 self.set_goal(i, x, y);
             }
             Command::Stop { unit } => {
@@ -942,6 +1030,7 @@ impl World {
                     let u = &mut self.units[i];
                     (u.goal, u.rest, u.target, u.chase, u.hunt) = (None, None, None, false, false);
                     (u.plan, u.assist) = (None, None);
+                    u.reclaim = None;
                 }
             }
             Command::Produce { unit, kind, repeat } => {
@@ -954,6 +1043,7 @@ impl World {
             }
             Command::Build { unit, kind, cx, cy } => self.order_build(unit, kind, cx, cy),
             Command::Assist { unit, target } => self.order_assist(unit, target),
+            Command::Reclaim { unit, wreck } => self.order_reclaim(unit, wreck),
             Command::ClearQueue { unit } => {
                 if let Some(i) = self.index_of(unit) {
                     (self.units[i].queue, self.units[i].work) = (Vec::new(), 0);
@@ -966,6 +1056,7 @@ impl World {
                 {
                     let u = &mut self.units[i];
                     (u.target, u.chase, u.hunt, u.plan, u.assist) = (Some(target), true, false, None, None);
+                    u.reclaim = None;
                 }
             }
         }
@@ -985,9 +1076,11 @@ impl Canon for World {
             .field("nextId", &self.next_id)
             .array("projectiles", &self.projectiles)
             .field("rng", &self.rng)
+            .opt("spots", (!self.spots.is_empty()).then_some(&self.spots))
             .opt("stores", (!self.stores.is_empty()).then_some(&self.stores))
             .field("tick", &self.tick)
             .array("units", &self.units)
+            .opt("wrecks", (!self.wrecks.is_empty()).then_some(&self.wrecks))
             .end();
     }
 }

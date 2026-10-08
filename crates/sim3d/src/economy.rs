@@ -21,6 +21,10 @@ pub struct Production {
     pub builds: Vec<usize>,
     /// What this unit adds to its owner's store every tick, per resource.
     pub produces: Vec<i64>,
+    /// Whether it is an extractor: a finished structure that also yields every resource spot under its footprint.
+    pub extracts: bool,
+    /// What the wreck it leaves when destroyed is worth, per resource. Empty leaves no wreck.
+    pub wreck: Vec<i64>,
 }
 
 impl Production {
@@ -38,6 +42,57 @@ pub struct Structure {
     pub depth: i32,
     /// The greatest difference between the heights of the footprint's corners on which it can be placed.
     pub max_rise: i32,
+}
+
+/// A resource spot on the map: an extractor whose footprint covers cell `(cx, cy)` yields `rate` of `resource`
+/// every tick. Part of the map, set when a game is made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Spot {
+    pub cx: i32,
+    pub cy: i32,
+    pub resource: usize,
+    pub rate: i64,
+}
+
+impl Canon for Spot {
+    fn canon(&self, w: &mut CanonHasher) {
+        w.object()
+            .field("cx", &self.cx)
+            .field("cy", &self.cy)
+            .field("rate", &self.rate)
+            .field("resource", &(self.resource as u32))
+            .end();
+    }
+}
+
+/// What is left of a destroyed unit. Builders reclaim it for resources: its worth comes back as reclaim work is
+/// done on it, the same way building pays out, and it is gone once all of it is reclaimed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wreck {
+    /// Wrecks take ids from the same counter as units and projectiles.
+    pub id: u32,
+    /// The type of the unit it was, whose `wreck` worth it holds.
+    pub kind: usize,
+    pub pos: crate::space::Vec3,
+    /// Reclaim work done so far.
+    pub work: i64,
+}
+
+impl Canon for Wreck {
+    fn canon(&self, w: &mut CanonHasher) {
+        w.object()
+            .field("id", &self.id)
+            .field("kind", &(self.kind as u32))
+            .field("pos", &self.pos)
+            .field("work", &self.work)
+            .end();
+    }
+}
+
+/// The reclaim work a wreck of a type with this build time takes: half the build time, and at least one tick's
+/// worth.
+pub fn reclaim_time(build_time: i64) -> i64 {
+    (build_time / 2).max(1)
 }
 
 /// A player's resources.
