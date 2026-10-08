@@ -1,0 +1,10 @@
+[package]
+name = "view3d"
+version = "0.1.0"
+description = "What the 3D renderer needs before it draws anything: the strategic-zoom camera, the terrain mesh and ground picking. Reads the simulation; never changes it."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+sim3d = { path = "../sim3d" }

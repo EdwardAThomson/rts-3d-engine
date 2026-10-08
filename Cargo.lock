@@ -21,3 +21,10 @@ version = "0.1.0"
 dependencies = [
  "rts-core",
 ]
+
+[[package]]
+name = "view3d"
+version = "0.1.0"
+dependencies = [
+ "sim3d",
+]
