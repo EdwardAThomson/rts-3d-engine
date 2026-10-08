@@ -68,3 +68,26 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     let shade = 1.0 - 0.22 * line * in.ground;
     return vec4<f32>(in.colour * light * shade, 1.0);
 }
+
+// Flat rectangles over the whole scene, such as the drag box, given in clip space with their colour.
+struct Flat {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) colour: vec4<f32>,
+};
+
+@vertex
+fn vs_overlay(@builtin(vertex_index) i: u32, @location(0) rect: vec4<f32>, @location(1) colour: vec4<f32>) -> Flat {
+    // Two triangles over corners 0, 1, 2 and 2, 1, 3, where bit 0 of a corner picks the far x and bit 1 the far y.
+    // The masks hold those bits for the six vertices in turn.
+    let far_x = ((0x32u >> i) & 1u) == 1u;
+    let far_y = ((0x2cu >> i) & 1u) == 1u;
+    var out: Flat;
+    out.clip = vec4<f32>(select(rect.x, rect.z, far_x), select(rect.y, rect.w, far_y), 0.0, 1.0);
+    out.colour = colour;
+    return out;
+}
+
+@fragment
+fn fs_overlay(in: Flat) -> @location(0) vec4<f32> {
+    return in.colour;
+}

@@ -22,6 +22,12 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 5. **Tested offscreen.** `Renderer::draw_to_image` draws with no window on any adapter, a software one included.
    The tests check the map against the sky, each player's colour where their units are, that a ridge hides a unit
    behind it, and leave frames in `target/` to look at.
+6. **Playing goes through `control`, with no GPU.** Selecting and ordering are worked out from the world, the
+   camera and the shapes on screen, so they are tested without an adapter. The cursor's ray picks the nearest unit
+   or frame box it enters, unless the ground (by `view3d::pick`, on the simulation's own heights) is nearer; a box
+   selects every unit of yours whose middle projects inside it. Orders go in as ordinary commands in sub-cell
+   units, so nothing new reaches replays or the state hash. A selected unit gets a pale plate under it, and the
+   drag box is flat rectangles drawn over the scene.
 
 ## The viewer
 
@@ -29,7 +35,13 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 cargo run --release -p render3d --bin play3d -- --seed 1 --players 2
 ```
 
-Computer players fight the generic skirmish (`ai3d::skirmish`). The wheel zooms at the cursor, arrow keys or WASD
+You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) against computer players. Left-click
+a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
+to attack it or the ground to move there, with Ctrl held to attack-move. A computer helper (an ordinary `ai3d`
+player) runs your base and factories and sends waves with the fighters you leave to it; once you give a unit an
+order it is yours alone, and the helper's orders for it are dropped. That lets you play before there is a HUD for
+building, an idea we take from Supreme Commander's and Total Annihilation's automation of the chores. `--watch 1`
+(`?watch=1` in the browser) leaves every side to the computer. The wheel zooms at the cursor, arrow keys or WASD
 pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape quits.
 The game runs at 30 ticks a second of game time; that rate is the viewer's choice, since the simulation has no
 clock.
@@ -45,11 +57,12 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 
 `wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
-Space pauses and the wheel zooms.
+Space pauses, a drag selects, a right-click opens no browser menu and the wheel zooms.
 
 ## Later
 
-- Playing, not only watching: selecting units with the mouse and giving orders through `view3d::pick`.
+- Building and production from a HUD, so the helper can be switched off; double-click to select every unit of a
+  kind on screen; control groups.
 - Models from the art studio's glTF exports in place of boxes, with icons when zoomed far out.
 - A HUD with the sprite batcher and font from `rts-platform`, and sound from its mixer.
 - Effects from `events`: muzzle flashes, impacts, wrecks burning.

@@ -1,5 +1,5 @@
-// Opens the browser viewer in headless Chromium and checks it draws the game and takes input: once with WebGPU and
-// once with WebGL2 (WebGPU switched off), each on Chromium's software GPU. Saves each frame as a PNG to look at.
+// Opens the browser viewer in headless Chromium and checks it draws the game and takes keys and the mouse: once
+// with WebGPU and once with WebGL2 (WebGPU switched off), each on Chromium's software GPU. Saves each frame as a PNG to look at.
 // Follows the Classic engine's check for its browser player (rts-engine, web/play/check.mjs).
 //
 //   cargo build --release --target wasm32-unknown-unknown -p render3d --bin play3d
@@ -129,6 +129,16 @@ for (const run of runs) {
   await page.locator("#game").focus();
   await page.keyboard.press("Space");
   const paused = await titled(/paused/);
+  // Dragging a box over the whole map selects your one builder; a right-click then orders it without the browser's
+  // own menu opening.
+  await page.mouse.move(5, 5);
+  await page.mouse.down();
+  await page.mouse.move(955, 595, { steps: 5 });
+  await page.mouse.up();
+  const selected = await titled(/, 1 selected/);
+  await page.evaluate(() => window.addEventListener("contextmenu", (e) => (window.menuBlocked = e.defaultPrevented)));
+  await page.mouse.click(480, 300, { button: "right" });
+  const noMenu = await page.evaluate(() => window.menuBlocked === true);
   const shot = await frame(page, run);
   if (shot.png) writeFileSync(`${out}/play3d-${run.name}.png`, shot.png);
   // The wheel zooms in at the cursor: with the game paused, the next frame differs.
@@ -142,6 +152,8 @@ for (const run of runs) {
     "the game ticks": ticking,
     "the frame shows the map": shot.colours >= 64,
     "Space pauses": paused,
+    "a drag selects": selected,
+    "right-click gives no menu": noMenu,
     "the wheel zooms": zoomed.colours >= 64 && zoomed.print !== shot.print,
     "no errors": errors.length === 0,
   };

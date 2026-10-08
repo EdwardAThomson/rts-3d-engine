@@ -37,8 +37,8 @@ units per side; measurements decide whether we go further.
 | `sim3d` | Intent orders in `world/intent.rs` (docs/intent.md): patrols that fight on the way and turn round, factories that keep a count of each unit type their owner wants, and units that fall back to a point when badly hurt. All are state, so they hash and replay like any order. | Started |
 | later: economy | Assisting factories, reclaiming frames, build priorities, rally points, upkeep. | Planned |
 | `view3d` | The renderer's groundwork, with no GPU code (docs/view.md): a strategic-zoom camera that tilts from an angled close view to straight down over the whole map and zooms at the cursor, the terrain mesh at full or coarser detail, and ground picking against the simulation's own heights. Floating point is fine here: it only reads the state. | Started |
-| `render3d` | The renderer (docs/render.md): the terrain and a box for every unit, frame, shot, wreck and spot, drawn with wgpu on `rts-platform` (the platform layer shared with the Classic engine, in the `rts-core` repository), sliding between ticks; tested offscreen. The `play3d` viewer shows computer players fighting the generic skirmish, on the desktop or in the browser (WebGPU or WebGL2). | Started |
-| later: renderer | Playing with the mouse, models from the art studio, a HUD, sound, effects from `events`. | Planned |
+| `render3d` | The renderer (docs/render.md): the terrain and a box for every unit, frame, shot, wreck and spot, drawn with wgpu on `rts-platform` (the platform layer shared with the Classic engine, in the `rts-core` repository), sliding between ticks; tested offscreen. The `play3d` viewer lets you play a side of the generic skirmish with the mouse (select, move, attack, attack-move; a computer helper runs your base) or watch computer players, on the desktop or in the browser (WebGPU or WebGL2). | Started |
+| later: renderer | A HUD for building and production, models from the art studio, sound, effects from `events`. | Planned |
 
 ## Roadmap
 

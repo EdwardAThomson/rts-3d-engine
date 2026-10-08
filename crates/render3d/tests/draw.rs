@@ -114,6 +114,40 @@ fn a_box_hides_behind_a_hill_seen_from_low_down() {
 }
 
 #[test]
+fn the_overlay_draws_over_the_scene_and_a_selected_unit_shows_its_ring() {
+    let gpu = Gpu::headless().expect("a GPU adapter");
+    let mut world = World::new(sim3d::terrain::Heightmap::flat(24, 24, 0), skirmish::types(), 1);
+    let tank = world.spawn_for(0, skirmish::TANK, 12 * SUB, 12 * SUB);
+    let mut camera = Camera::new(world.map());
+    camera.zoom = 0.2;
+    camera.focus = [12.0, 12.0, 0.0];
+    camera.settle(world.map());
+    let mut shapes = Shapes::default().shapes(&world, 1.0);
+    let mut control = render3d::control::Control::new(0);
+    control.selected.insert(tank);
+    shapes.extend(control.rings(&shapes));
+    let mut renderer = Renderer::new(&gpu, OFFSCREEN_FORMAT);
+    renderer.set_overlay(&render3d::control::outline([20.0, 20.0, 120.0, 80.0], 2.0));
+    let image = renderer.draw_to_image(&gpu, (W, H), &world, &camera, &shapes, SKY);
+    write_png("../../target/render3d-selected.png", W, H, &image);
+    // The box's edge is drawn plain over the ground, and its fill only tints it.
+    assert_eq!(pixel(&image, (70.0, 20.5)), [240, 240, 240]);
+    let inside = pixel(&image, (70.0, 50.0));
+    let outside = pixel(&image, (70.0, 100.0));
+    assert!(inside.iter().zip(&outside).all(|(i, o)| i > o) && inside[0] < 200, "{inside:?} over {outside:?}");
+    // Just past the tank's side, the ring shows pale; without it that pixel is ground.
+    let side = view3d::to_view(world.unit(tank).unwrap().pos);
+    let r = world.types()[skirmish::TANK].movement.radius as f32 / SUB as f32;
+    let at = camera.project(world.map(), [side[0] + r + 0.06, side[1], 0.0], W as f32, H as f32).unwrap();
+    let ring = pixel(&image, at);
+    assert!(ring.iter().all(|&c| c > 150), "the ring at {at:?} is {ring:?}");
+    renderer.set_overlay(&[]);
+    let bare = renderer.draw_to_image(&gpu, (W, H), &world, &camera, &Shapes::default().shapes(&world, 1.0), SKY);
+    assert!(pixel(&bare, at).iter().any(|&c| c < 150), "and is ground without the ring");
+    assert_ne!(pixel(&bare, (70.0, 20.5)), [240, 240, 240], "and the overlay is gone once cleared");
+}
+
+#[test]
 fn shapes_cover_spots_units_frames_and_shots() {
     let mut world = skirmish::skirmish(1, 2);
     let mut shapes = Shapes::default();

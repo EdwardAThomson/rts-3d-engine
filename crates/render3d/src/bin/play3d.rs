@@ -1,8 +1,13 @@
-//! The viewer: computer players fighting a generic skirmish, in a window.
-//!   cargo run --release -p render3d --bin play3d -- [--seed 1] [--players 2] [--speed 1] [--frames N]
+//! The viewer: a generic skirmish in a window, with you playing the first side (blue) against computer players.
+//!   cargo run --release -p render3d --bin play3d -- [--seed 1] [--players 2] [--speed 1] [--frames N] [--watch 1]
 //!
 //! The same program runs in the browser (`web/play3d/`, see docs/render.md), drawing with WebGPU or WebGL2 into the
 //! page's canvas, with the options in the page address instead: `?seed=3&players=4&speed=8`.
+//!
+//! Left-click a unit of yours to select it, or drag a box round several; shift adds to the selection. Right-click an
+//! enemy to attack it or the ground to move there; with Ctrl held, they attack-move and fight on the way. A computer
+//! helper runs your base and factories, and a unit is yours alone once you give it an order (see `control`).
+//! `--watch 1` leaves every side to the computer.
 //!
 //! The mouse wheel zooms at the cursor, from a few units up to the whole map. Arrow keys or WASD pan, Q and E turn the
 //! camera, space pauses, + and - change the game speed, Home shows the whole map again and Escape quits. The title
@@ -16,14 +21,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai3d::{Ai, Settings, skirmish};
+use render3d::control::{Control, Screen, outline};
 use render3d::{Renderer, Shapes};
 use rts_platform::{Gpu, Instant};
 use sim3d::world::World;
 use view3d::camera::Camera;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 /// One tick of game time at speed 1.
@@ -70,9 +76,13 @@ struct Running {
 
 struct App {
     world: World,
-    /// Every player's number, all of them computer players.
+    /// Every player's number.
     players: Vec<u8>,
+    /// A computer player for every side; on the person's side it is their helper.
     ais: Vec<Ai>,
+    /// The person's side, unless they are only watching.
+    control: Option<Control>,
+    modifiers: ModifiersState,
     shapes: Shapes,
     camera: Camera,
     run: Option<Running>,
@@ -91,12 +101,14 @@ struct App {
 }
 
 impl App {
-    fn new(seed: i32, players: u8) -> App {
+    fn new(seed: i32, players: u8, watch: bool) -> App {
         let world = skirmish::skirmish(seed, players);
         let camera = Camera::new(world.map());
         App {
             players: (0..players).collect(),
             ais: (0..players).map(|p| Ai::new(p, Settings::normal())).collect(),
+            control: (!watch).then(|| Control::new(0)),
+            modifiers: ModifiersState::empty(),
             world,
             shapes: Shapes::default(),
             camera,
@@ -130,7 +142,14 @@ impl App {
         let mut ran = 0;
         while self.owed >= TICK && ran < MAX_TICKS_PER_FRAME {
             for ai in &mut self.ais {
-                ai.tick(&mut self.world);
+                if !ai.due(&self.world) {
+                    continue;
+                }
+                for c in ai.think(&self.world) {
+                    if self.control.as_ref().is_none_or(|h| h.player != ai.player || h.allows(&c)) {
+                        self.world.command(c);
+                    }
+                }
             }
             self.shapes.remember(&self.world);
             self.world.step();
@@ -141,16 +160,25 @@ impl App {
             self.owed = Duration::ZERO;
         }
         self.winner = ai3d::winner(&self.world, &self.players);
+        if let Some(control) = &mut self.control {
+            control.tidy(&self.world);
+        }
         self.owed.as_secs_f32() / TICK.as_secs_f32()
     }
 
     fn title(&self) -> String {
         let state = match (self.winner, self.paused) {
+            (Some(p), _) if self.control.as_ref().is_some_and(|c| c.player == p) => ", you won".into(),
+            (Some(_), _) if self.control.is_some() => ", you lost".into(),
             (Some(p), _) => format!(", player {p} won"),
             (None, true) => ", paused".into(),
             (None, false) => String::new(),
         };
-        format!("3D RTS viewer: tick {}, speed {}x{state}", self.world.tick(), SPEEDS[self.speed])
+        let selected = match &self.control {
+            Some(c) => format!(", {} selected", c.selected.len()),
+            None => String::new(),
+        };
+        format!("3D RTS viewer: tick {}, speed {}x{selected}{state}", self.world.tick(), SPEEDS[self.speed])
     }
 
     /// Pan and turn with the held keys, for a frame `dt` seconds long.
@@ -178,8 +206,16 @@ impl App {
         let alpha = self.advance();
         self.steer(1.0 / 60.0);
         let title = self.title();
-        let shapes = self.shapes.shapes(&self.world, alpha);
+        let mut shapes = self.shapes.shapes(&self.world, alpha);
         let Some(run) = &mut self.run else { return };
+        let mut overlay = Vec::new();
+        if let Some(control) = &self.control {
+            shapes.extend(control.rings(&shapes));
+            if let Some(r) = control.dragging(self.mouse) {
+                overlay = outline(r, 1.5);
+            }
+        }
+        run.renderer.set_overlay(&overlay);
         let texture = match run.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -218,6 +254,32 @@ impl App {
         let renderer = Renderer::new(&gpu, config.format);
         self.run = Some(Running { window, surface, config, gpu, renderer });
         self.last = Instant::now();
+    }
+
+    fn screen(&self) -> Option<Screen> {
+        let run = self.run.as_ref()?;
+        Some(Screen { width: run.config.width as f32, height: run.config.height as f32 })
+    }
+
+    fn click(&mut self, button: MouseButton, state: ElementState) {
+        let Some(screen) = self.screen() else { return };
+        let Some(control) = &mut self.control else { return };
+        // What is on screen now, so a click lands on the box it points at.
+        let shapes = self.shapes.shapes(&self.world, 1.0);
+        match (button, state) {
+            (MouseButton::Left, ElementState::Pressed) => control.press(self.mouse.0, self.mouse.1),
+            (MouseButton::Left, ElementState::Released) => {
+                let add = self.modifiers.shift_key();
+                control.release(&self.world, &self.camera, &shapes, self.mouse, screen, add);
+            }
+            (MouseButton::Right, ElementState::Pressed) => {
+                let fight = self.modifiers.control_key();
+                for c in control.order(&self.world, &self.camera, &shapes, self.mouse, screen, fight) {
+                    self.world.command(c);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
@@ -296,6 +358,8 @@ impl ApplicationHandler for App {
                     self.keys.remove(&code);
                 }
             }
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::MouseInput { button, state, .. } => self.click(button, state),
             WindowEvent::CursorMoved { position, .. } => self.mouse = (position.x as f32, position.y as f32),
             WindowEvent::MouseWheel { delta, .. } => {
                 let steps = match delta {
@@ -324,7 +388,8 @@ impl ApplicationHandler for App {
 fn main() {
     let seed = arg("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
     let players = arg("players").and_then(|s| s.parse().ok()).unwrap_or(2);
-    let mut app = App::new(seed, players);
+    let watch = arg("watch").is_some_and(|w| w != "0");
+    let mut app = App::new(seed, players, watch);
     let event_loop = EventLoop::new().expect("an event loop (is there a display?)");
     event_loop.run_app(&mut app).expect("the event loop runs");
     println!("quit at tick {} after {} frames, winner {:?}", app.world.tick(), app.frames, app.winner);
@@ -337,5 +402,6 @@ fn main() {
     rts_platform::web::status("loading");
     let seed = arg("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
     let players = arg("players").and_then(|s| s.parse().ok()).unwrap_or(2);
-    EventLoop::new().expect("an event loop").spawn_app(App::new(seed, players));
+    let watch = arg("watch").is_some_and(|w| w != "0");
+    EventLoop::new().expect("an event loop").spawn_app(App::new(seed, players, watch));
 }

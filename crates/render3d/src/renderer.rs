@@ -1,5 +1,6 @@
-//! The GPU side: two pipelines over one depth buffer, one for the terrain mesh and one for boxes drawn as instances
-//! of a single cube. The terrain mesh is made once per level of detail the camera asks for and kept.
+//! The GPU side: pipelines over one depth buffer, one for the terrain mesh and one for boxes drawn as instances of a
+//! single cube, then flat rectangles over it all (the drag box). The terrain mesh is made once per level of
+//! detail the camera asks for and kept.
 
 use rts_platform::Gpu;
 use rts_platform::gpu::OFFSCREEN_FORMAT;
@@ -8,6 +9,7 @@ use view3d::camera::Camera;
 use view3d::maths::normalize;
 use view3d::terrain;
 
+use crate::control::Rect;
 use crate::shapes::Shape;
 
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -16,6 +18,8 @@ const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const VERTEX: u64 = 24;
 /// Bytes per box: its two corners and a colour.
 const INSTANCE: u64 = 28;
+/// Bytes per overlay rectangle: its corners in clip space and a colour.
+const FLAT: u64 = 20;
 
 /// The direction towards the sun: low in the west-north-west, so slopes facing away from it fall into shade and
 /// hills read as hills.
@@ -32,12 +36,16 @@ struct Mesh {
 pub struct Renderer {
     terrain_pipeline: wgpu::RenderPipeline,
     box_pipeline: wgpu::RenderPipeline,
+    overlay_pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
     meshes: Vec<Mesh>,
     cube: (wgpu::Buffer, wgpu::Buffer),
     instances: Option<wgpu::Buffer>,
     depth: Option<(u32, u32, wgpu::TextureView)>,
+    /// Rectangles drawn over the scene until changed, and their buffer.
+    overlay: Vec<Rect>,
+    flats: Option<wgpu::Buffer>,
 }
 
 impl Renderer {
@@ -119,6 +127,43 @@ impl Renderer {
         // culled. Boxes are cheap enough to draw both ways round.
         let terrain_pipeline = pipeline("terrain", "vs_terrain", &[Some(vertices.clone())], Some(wgpu::Face::Back));
         let box_pipeline = pipeline("boxes", "vs_box", &[Some(vertices), Some(instances)], None);
+        // The overlay is drawn last, over everything and blended, so the drag box shows what is under it.
+        let flat = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4];
+        let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("overlay"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_overlay"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: FLAT,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &flat,
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_overlay"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
             size: 80,
@@ -138,13 +183,21 @@ impl Renderer {
         Renderer {
             terrain_pipeline,
             box_pipeline,
+            overlay_pipeline,
             globals,
             globals_bind,
             meshes: Vec::new(),
             cube,
             instances: None,
             depth: None,
+            overlay: Vec::new(),
+            flats: None,
         }
+    }
+
+    /// Rectangles to draw over the scene from the next frame on, in pixels from the top left; empty for none.
+    pub fn set_overlay(&mut self, rects: &[Rect]) {
+        self.overlay = rects.to_vec();
     }
 
     /// Draw the terrain of `world` and `shapes` on it, seen by `camera`, into `target` (`width` by `height`
@@ -190,6 +243,9 @@ impl Renderer {
         }
         if !shapes.is_empty() {
             self.upload(gpu, shapes);
+        }
+        if !self.overlay.is_empty() {
+            self.upload_overlay(gpu, (width as f32, height as f32));
         }
         if self.depth.as_ref().is_none_or(|d| (d.0, d.1) != (width, height)) {
             let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -241,6 +297,11 @@ impl Renderer {
                 pass.set_index_buffer(self.cube.1.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..36, 0, 0..shapes.len() as u32);
             }
+            if let Some(flats) = self.flats.as_ref().filter(|_| !self.overlay.is_empty()) {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_vertex_buffer(0, flats.slice(..));
+                pass.draw(0..6, 0..self.overlay.len() as u32);
+            }
         }
         gpu.queue.submit([encoder.finish()]);
     }
@@ -263,6 +324,32 @@ impl Renderer {
             }));
         }
         gpu.queue.write_buffer(self.instances.as_ref().expect("made above"), 0, &bytes);
+    }
+
+    /// Copy the overlay to the GPU in clip space for a `width` by `height` target.
+    fn upload_overlay(&mut self, gpu: &Gpu, (width, height): (f32, f32)) {
+        let mut bytes = Vec::with_capacity(self.overlay.len() * FLAT as usize);
+        for r in &self.overlay {
+            let clip = [
+                r.min[0] / width * 2.0 - 1.0,
+                1.0 - r.min[1] / height * 2.0,
+                r.max[0] / width * 2.0 - 1.0,
+                1.0 - r.max[1] / height * 2.0,
+            ];
+            for f in clip {
+                bytes.extend_from_slice(&f.to_le_bytes());
+            }
+            bytes.extend_from_slice(&r.colour);
+        }
+        if self.flats.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
+            self.flats = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("overlay"),
+                size: (bytes.len() as u64).next_power_of_two().max(1024),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        gpu.queue.write_buffer(self.flats.as_ref().expect("made above"), 0, &bytes);
     }
 
     /// Draw into a new `width` by `height` image and return its RGBA pixels, rows top to bottom. For tests and
