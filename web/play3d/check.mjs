@@ -153,6 +153,12 @@ for (const run of runs) {
   // M mutes the sound, which opened on the first click.
   await page.keyboard.press("KeyM");
   const muted = await titled(/muted/);
+  // Ctrl+1 keeps the selection as group 1; a click on empty ground clears it and 1 brings it back.
+  await page.keyboard.press("Control+Digit1");
+  await page.mouse.click(20, 580);
+  const cleared = await titled(/, 0 selected/);
+  await page.keyboard.press("Digit1");
+  const recalled = cleared && (await titled(/, 1 selected/));
   const shot = await frame(page, run);
   if (shot.png) writeFileSync(`${out}/play3d-${run.name}.png`, shot.png);
   // The wheel zooms in at the cursor: with the game paused, the next frame differs.
@@ -172,6 +178,7 @@ for (const run of runs) {
     "Escape stops placing": stopped,
     "the panel turns the helper off": helperOff,
     "M mutes": muted,
+    "a control group comes back": recalled,
     "the wheel zooms": zoomed.colours >= 64 && zoomed.print !== shot.print,
     "no errors": errors.length === 0,
   };

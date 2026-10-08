@@ -1,8 +1,11 @@
 //! Playing one side with the mouse: click or drag a box to select your units, right-click to send them. Right-click
 //! an enemy to attack it, the ground to move there, or with attack-move held, to fight along the way. Builders
 //! right-clicked onto a frame of yours help build it, and onto a wreck reclaim it. A click also selects one of your
-//! structures, so the panel can show what it builds (see `panel`). Worked out from the world, the camera and the
-//! shapes on screen with no GPU, so it is tested on its own.
+//! structures, so the panel can show what it builds (see `panel`); a double click selects every unit of that kind
+//! on screen. Right-clicking the ground with a factory selected gives it a rally point, where every unit it finishes
+//! goes. Ctrl and a number keeps the selection as a control group, the number alone selects the group again (shift
+//! adds it), and the person's viewer looks at the group on a second press. Worked out from the world, the camera
+//! and the shapes on screen with no GPU, so it is tested on its own.
 //!
 //! The person shares their side with a computer helper that runs the base and the factories. A unit the person has
 //! given an order to is theirs from then on: `allows` drops the helper's orders for it. The idea of a helper for
@@ -13,7 +16,7 @@
 
 use std::collections::BTreeSet;
 
-use sim3d::world::{Command, World};
+use sim3d::world::{Command, Event, World};
 use view3d::camera::Camera;
 use view3d::maths::V3;
 use view3d::pick::{Ray, ground_hit};
@@ -26,6 +29,12 @@ pub const CLICK: f32 = 6.0;
 
 /// The colour of the ring under a selected unit and of the drag box's edge.
 pub const SELECTED: [u8; 4] = [240, 240, 240, 255];
+
+/// The colour of a rally point's flag.
+pub const RALLY: [u8; 4] = [250, 210, 70, 255];
+
+/// How many control groups there are, one for each number key.
+pub const GROUPS: usize = 10;
 
 /// A rectangle on screen in pixels from the top left, drawn over the scene.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,6 +59,8 @@ pub struct Control {
     pub selected: BTreeSet<u32>,
     /// Units the person has ordered, which the helper leaves alone.
     pub claimed: BTreeSet<u32>,
+    /// Control groups, by number key.
+    pub groups: [BTreeSet<u32>; GROUPS],
     /// Where the left button went down, while it is held.
     press: Option<(f32, f32)>,
 }
@@ -64,6 +75,87 @@ impl Control {
         let alive = |id: &u32| world.unit(*id).is_some();
         self.selected.retain(alive);
         self.claimed.retain(alive);
+        for g in &mut self.groups {
+            g.retain(alive);
+        }
+    }
+
+    /// Note what a tick did: a unit finished by a factory of yours with a rally point was sent there by you, so it
+    /// is yours, not the helper's.
+    pub fn observe(&mut self, world: &World, events: &[Event]) {
+        for e in events {
+            if let Event::Built { by, unit } = *e
+                && world.unit(by).is_some_and(|f| f.owner == self.player && f.rally.is_some())
+            {
+                self.claimed.insert(unit);
+            }
+        }
+    }
+
+    /// Keep the selection as control group `n`, in place of what the group held.
+    pub fn store(&mut self, n: usize) {
+        if let Some(g) = self.groups.get_mut(n) {
+            g.clone_from(&self.selected);
+        }
+    }
+
+    /// Select control group `n`, or with `add` add it to the selection. A group that is empty changes nothing, so
+    /// a stray key press never drops the selection. Returns whether the group had anything in it.
+    pub fn recall(&mut self, world: &World, n: usize, add: bool) -> bool {
+        self.tidy(world);
+        let Some(g) = self.groups.get(n).filter(|g| !g.is_empty()) else { return false };
+        if !add {
+            self.selected.clear();
+        }
+        self.selected.extend(g);
+        true
+    }
+
+    /// The middle of control group `n` on the map, in cells, for looking at it.
+    pub fn group_middle(&self, world: &World, n: usize) -> Option<[f32; 2]> {
+        let points: Vec<V3> = self.groups.get(n)?.iter().filter_map(|&id| middle(world, id)).collect();
+        let count = points.len() as f32;
+        (!points.is_empty()).then(|| {
+            let sum = points.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0], a[1] + p[1]]);
+            [sum[0] / count, sum[1] / count]
+        })
+    }
+
+    /// A double click at `(x, y)`: select every unit or structure of yours of the same kind as the one under the
+    /// cursor that is on screen, or with `add` add them to the selection.
+    pub fn select_alike(
+        &mut self,
+        world: &World,
+        camera: &Camera,
+        shapes: &[Shape],
+        at: (f32, f32),
+        screen: Screen,
+        add: bool,
+    ) {
+        let ray = camera.ray(at.0, at.1, screen.width, screen.height);
+        let Some(kind) = under(world, shapes, &ray)
+            .and_then(|id| world.unit(id))
+            .filter(|u| u.owner == self.player && u.build.is_none())
+            .map(|u| u.kind)
+        else {
+            return;
+        };
+        if !add {
+            self.selected.clear();
+        }
+        for s in shapes {
+            let Part::Unit(id) = s.part else { continue };
+            if !world.unit(id).is_some_and(|u| u.owner == self.player && u.kind == kind) {
+                continue;
+            }
+            let centre = [(s.min[0] + s.max[0]) / 2.0, (s.min[1] + s.max[1]) / 2.0, (s.min[2] + s.max[2]) / 2.0];
+            if let Some((x, y)) = camera.project(world.map(), centre, screen.width, screen.height)
+                && (0.0..=screen.width).contains(&x)
+                && (0.0..=screen.height).contains(&y)
+            {
+                self.selected.insert(id);
+            }
+        }
     }
 
     /// Whether the helper may give this order: not for a unit the person has taken over.
@@ -132,7 +224,8 @@ impl Control {
 
     /// The right button was clicked at `(x, y)`: orders for every selected mobile unit. On an enemy, attack it; on
     /// the ground, move there, or attack-move with `fight`. On a frame of yours, builders help build it, and on a
-    /// wreck they reclaim it; anything else selected stays put. The ordered units become the person's.
+    /// wreck they reclaim it; anything else selected stays put. The ordered units become the person's. Selected
+    /// factories take a click on the ground as their new rally point.
     pub fn order(
         &mut self,
         world: &World,
@@ -167,7 +260,10 @@ impl Control {
                 None => return Vec::new(),
             },
         };
-        let mut out = Vec::new();
+        let mut out: Vec<Command> = match goal {
+            Some(point) => self.factories(world).map(|unit| Command::Rally { unit, point: Some(point) }).collect(),
+            None => Vec::new(),
+        };
         for unit in movers {
             out.push(match (enemy, goal) {
                 (Some(target), _) => Command::Attack { unit, target },
@@ -191,6 +287,44 @@ impl Control {
                 Shape::plain(s.part, min, [s.max[0] + RIM, s.max[1] + RIM, s.min[2] + 0.04], SELECTED)
             })
             .collect()
+    }
+
+    /// A flag on a post at the rally point of each selected factory that has one.
+    pub fn rallies(&self, world: &World) -> Vec<Shape> {
+        const POST: f32 = 0.05;
+        const TALL: f32 = 1.2;
+        const FLAG: f32 = 0.3;
+        let mut out = Vec::new();
+        for id in self.factories(world) {
+            let Some((x, y)) = world.unit(id).and_then(|u| u.rally) else { continue };
+            let p = to_view(sim3d::space::Vec3::new(x, y, 0));
+            let z = view3d::ground(world.map(), p[0], p[1]);
+            out.push(Shape::plain(
+                Part::Rally(id),
+                [p[0] - POST, p[1] - POST, z],
+                [p[0] + POST, p[1] + POST, z + TALL],
+                SELECTED,
+            ));
+            out.push(Shape::plain(
+                Part::Rally(id),
+                [p[0] + POST, p[1] - FLAG / 2.0, z + TALL - FLAG],
+                [p[0] + POST + 1.5 * FLAG, p[1] + FLAG / 2.0, z + TALL],
+                RALLY,
+            ));
+        }
+        out
+    }
+
+    /// The selected factories of this player's that build mobile units, finished, in id order.
+    fn factories<'a>(&'a self, world: &'a World) -> impl Iterator<Item = u32> + 'a {
+        let types = world.types();
+        self.selected.iter().copied().filter(move |&id| {
+            world.unit(id).is_some_and(|u| {
+                u.owner == self.player
+                    && u.build.is_none()
+                    && types[u.kind].production.builds.iter().any(|&k| types[k].structure.is_none())
+            })
+        })
     }
 
     /// Whether `id` is a unit of this player's that can take orders to go somewhere: alive, and not a structure.
@@ -283,7 +417,8 @@ pub fn unit_of(command: &Command) -> u32 {
         | Command::Reclaim { unit, .. }
         | Command::Patrol { unit, .. }
         | Command::Keep { unit, .. }
-        | Command::FallBack { unit, .. } => unit,
+        | Command::FallBack { unit, .. }
+        | Command::Rally { unit, .. } => unit,
     }
 }
 

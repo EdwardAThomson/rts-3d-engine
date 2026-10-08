@@ -8,7 +8,10 @@
 //! Left-click a unit of yours to select it, or drag a box round several; shift adds to the selection. Right-click an
 //! enemy to attack it or the ground to move there; with Ctrl held, they attack-move and fight on the way. A computer
 //! helper runs your base and factories, and a unit is yours alone once you give it an order (see `control`).
-//! Right-click a frame of yours with builders selected to help build it, or a wreck to reclaim it.
+//! Right-click a frame of yours with builders selected to help build it, or a wreck to reclaim it. Double-click a
+//! unit to select every unit of that kind on screen. With a factory selected, right-click the ground to set its
+//! rally point, where every unit it finishes goes. Ctrl and a number key keep the selection as a control group;
+//! the number selects it again (shift adds it), and pressing it twice quickly looks at the group.
 //!
 //! The panel on the right (see `panel`) has the minimap (click or drag on it to look there), your stock, and buttons
 //! for what the selection can make: click a structure's button, then the ground to place it (shift places more,
@@ -30,7 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai3d::{Ai, Settings, skirmish};
-use render3d::control::{Control, Screen, outline};
+use render3d::control::{CLICK, Control, Screen, outline};
 use render3d::effects::Effects;
 use render3d::panel::{self, Clicked, Names, Panel};
 use render3d::sound::Sounds;
@@ -56,6 +59,8 @@ const MAX_TICKS_PER_FRAME: u32 = 32;
 const SPEEDS: [u32; 6] = [1, 2, 4, 8, 16, 32];
 /// A night-blue sky.
 const SKY: [u8; 3] = [20, 24, 32];
+/// Two clicks, or two presses of a group's number, this close together are a double.
+const DOUBLE: Duration = Duration::from_millis(400);
 /// Share of the screen panned per second, and radians turned per second.
 const PAN: f32 = 0.8;
 const TURN: f32 = 1.6;
@@ -111,6 +116,10 @@ struct App {
     /// Whether the left button went down on the minimap and is still held, so moving looks along.
     looking: bool,
     modifiers: ModifiersState,
+    /// When and where the last left click landed, to tell a double click.
+    last_click: Option<(Instant, (f32, f32))>,
+    /// The last control group recalled and when, to tell a double press.
+    last_group: Option<(usize, Instant)>,
     shapes: Shapes,
     camera: Camera,
     run: Option<Running>,
@@ -153,6 +162,8 @@ impl App {
             speaker_tried: false,
             looking: false,
             modifiers: ModifiersState::empty(),
+            last_click: None,
+            last_group: None,
             world,
             shapes: Shapes::default(),
             camera,
@@ -199,6 +210,9 @@ impl App {
             self.shapes.remember(&self.world);
             let events = self.world.step();
             self.effects.observe(&self.world, &events);
+            if let Some(control) = &mut self.control {
+                control.observe(&self.world, &events);
+            }
             self.play(&events);
             self.owed -= TICK;
             ran += 1;
@@ -327,6 +341,7 @@ impl App {
         let mut overlay = Vec::new();
         if let Some(control) = &self.control {
             shapes.extend(control.rings(&shapes));
+            shapes.extend(control.rallies(&self.world));
             if let Some(r) = control.dragging(self.mouse) {
                 overlay = outline(r, 1.5);
             }
@@ -447,7 +462,17 @@ impl App {
             (MouseButton::Left, ElementState::Pressed) => control.press(self.mouse.0, self.mouse.1),
             (MouseButton::Left, ElementState::Released) => {
                 let add = self.modifiers.shift_key();
+                let click = control.dragging(self.mouse).is_none();
                 control.release(&self.world, &self.camera, &shapes, self.mouse, scene, add);
+                if click && self.mouse.0 < scene.width {
+                    let now = Instant::now();
+                    let near = |(x, y): (f32, f32)| (x - self.mouse.0).abs() + (y - self.mouse.1).abs() < CLICK;
+                    let double = self.last_click.is_some_and(|(t, at)| now - t < DOUBLE && near(at));
+                    if double {
+                        control.select_alike(&self.world, &self.camera, &shapes, self.mouse, scene, add);
+                    }
+                    self.last_click = (!double).then_some((now, self.mouse));
+                }
             }
             (MouseButton::Right, ElementState::Pressed) if placing => self.panel.placing = None,
             (MouseButton::Right, ElementState::Pressed) => {
@@ -462,6 +487,10 @@ impl App {
 
     fn key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
         self.open_speaker();
+        if let Some(n) = digit(code) {
+            self.group(n);
+            return;
+        }
         match code {
             KeyCode::KeyM => {
                 if let Ok(mut m) = self.mixer.lock() {
@@ -477,6 +506,45 @@ impl App {
             _ => {}
         }
     }
+}
+
+impl App {
+    /// A number key: with Ctrl keep the selection as that control group, otherwise select the group (shift adds
+    /// it), and on a second press in quick succession look at it.
+    fn group(&mut self, n: usize) {
+        let Some(control) = &mut self.control else { return };
+        if self.modifiers.control_key() {
+            control.store(n);
+            self.last_group = None;
+            return;
+        }
+        if !control.recall(&self.world, n, self.modifiers.shift_key()) {
+            return;
+        }
+        let now = Instant::now();
+        let again = self.last_group.is_some_and(|(g, t)| g == n && now - t < DOUBLE);
+        if again && let Some(p) = control.group_middle(&self.world, n) {
+            look(&mut self.camera, &self.world, p);
+        }
+        self.last_group = (!again).then_some((n, now));
+    }
+}
+
+/// The control group a number key stands for: group n for the key n.
+fn digit(code: KeyCode) -> Option<usize> {
+    const KEYS: [KeyCode; 10] = [
+        KeyCode::Digit0,
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    KEYS.iter().position(|&k| k == code)
 }
 
 impl ApplicationHandler for App {

@@ -29,7 +29,8 @@ empty, everything that spends slows down together and the game says so. Nothing 
    paid in id order, each never taking more than is left, so a store never goes below empty. Later: build
    priorities.
 6. **Factories** are units with build power, a list of what they can build, and a queue (repeat optional). The
-   finished unit appears beside the factory. Later: rally points and exits that face a way.
+   finished unit appears beside the factory, and heads for the factory's rally point if it has one (docs/intent.md).
+   Later: exits that face a way.
 7. **Construction.** A builder ordered to build a structure drives to a free cell beside the site, waits until no
    ground unit stands on it, places a frame (a unit at 1 health and no work done) and builds it from within one
    cell. The frame's health grows with the work done, on top of any damage it takes, and it does nothing (no

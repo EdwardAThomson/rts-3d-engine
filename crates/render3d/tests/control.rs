@@ -254,9 +254,108 @@ fn a_click_selects_a_structure_of_yours_but_a_box_takes_only_units() {
     control.press(0.0, 0.0);
     control.release(&world, &camera, &shapes, (SCREEN.width, SCREEN.height), SCREEN, false);
     assert_eq!(control.selected.iter().copied().collect::<Vec<_>>(), [tank]);
-    // A selected structure takes no move order.
+    // A selected factory takes no move order, but the ground as its rally point.
     control.selected.insert(factory);
     let ground = camera.project(world.map(), [12.0, 14.0, 0.0], SCREEN.width, SCREEN.height).unwrap();
     let orders = control.order(&world, &camera, &shapes, ground, SCREEN, false);
-    assert!(matches!(orders[..], [Command::Move { unit, .. }] if unit == tank));
+    assert!(
+        matches!(orders[..], [Command::Rally { unit: f, point: Some(_) }, Command::Move { unit, .. }]
+            if f == factory && unit == tank),
+        "{orders:?}"
+    );
+}
+
+#[test]
+fn a_rallied_factory_sends_what_it_builds_there_and_the_helper_leaves_it_alone() {
+    let mut world = World::new(Heightmap::flat(24, 24, 0), skirmish::types(), 1);
+    world.set_store(0, vec![1_000_000; 2], vec![1_000_000; 2]);
+    let factory = world.spawn(FACTORY, 6 * SUB, 6 * SUB);
+    let camera = close(&world, 10.0, 10.0);
+    let mut control = Control::new(0);
+    click(&mut control, &world, &camera, on_screen(&world, &camera, factory), false);
+    let shapes = Shapes::default().shapes(&world, 1.0);
+    assert!(control.rallies(&world).is_empty(), "no flag before a rally point is set");
+    let ground = camera.project(world.map(), [14.0, 12.0, 0.0], SCREEN.width, SCREEN.height).unwrap();
+    for c in control.order(&world, &camera, &shapes, ground, SCREEN, false) {
+        world.command(c);
+    }
+    world.command(Command::Produce { unit: factory, kind: TANK, repeat: false });
+    world.step();
+    let flags = control.rallies(&world);
+    assert_eq!(flags.len(), 2, "a post and its flag");
+    assert!(flags.iter().all(|s| s.part == Part::Rally(factory)));
+    assert!((flags[0].min[0] - 14.0).abs() < 0.2 && (flags[0].min[1] - 12.0).abs() < 0.2, "{:?}", flags[0]);
+
+    let mut tank = None;
+    for _ in 0..3000 {
+        let events = world.step();
+        control.observe(&world, &events);
+        tank = events.iter().find_map(|e| match *e {
+            sim3d::world::Event::Built { unit, .. } => Some(unit),
+            _ => None,
+        });
+        if tank.is_some() {
+            break;
+        }
+    }
+    let tank = tank.expect("the factory built a tank");
+    assert!(world.unit(tank).unwrap().goal.is_some(), "it set off for the rally point");
+    assert!(!control.allows(&Command::Stop { unit: tank }), "and is the person's, not the helper's");
+}
+
+#[test]
+fn control_groups_keep_a_selection_and_bring_it_back() {
+    let (world, [a, b, ..]) = field();
+    let mut control = Control::new(0);
+    control.selected.extend([a, b]);
+    control.store(1);
+    control.selected = [a].into();
+    control.store(2);
+    control.selected.clear();
+    assert!(control.recall(&world, 1, false));
+    assert_eq!(control.selected.iter().copied().collect::<Vec<_>>(), [a, b]);
+    assert!(control.recall(&world, 2, false));
+    assert_eq!(control.selected.iter().copied().collect::<Vec<_>>(), [a]);
+    // An empty group changes nothing; shift adds a group to the selection.
+    assert!(!control.recall(&world, 5, false));
+    assert_eq!(control.selected.iter().copied().collect::<Vec<_>>(), [a]);
+    control.selected = [b].into();
+    control.store(3);
+    control.selected = [a].into();
+    assert!(control.recall(&world, 3, true));
+    assert_eq!(control.selected.len(), 2);
+    // A group's middle is between its units, and a unit that is gone drops out of every group.
+    let m = control.group_middle(&world, 1).unwrap();
+    assert!((m[0] - 8.5).abs() < 0.6 && (m[1] - 8.0).abs() < 0.6, "{m:?}");
+    control.groups[1].insert(999);
+    control.tidy(&world);
+    assert_eq!(control.groups[1].iter().copied().collect::<Vec<_>>(), [a, b]);
+}
+
+#[test]
+fn a_double_click_selects_every_unit_of_that_kind_on_screen() {
+    let mut world = World::new(Heightmap::flat(24, 24, 0), skirmish::types(), 1);
+    let tanks = [8, 10, 12].map(|x| world.spawn(TANK, x * SUB, 8 * SUB));
+    let builder = world.spawn(BUILDER, 10 * SUB, 10 * SUB);
+    let far = world.spawn(TANK, 22 * SUB, 22 * SUB);
+    world.spawn_for(1, TANK, 11 * SUB, 9 * SUB);
+    let camera = close(&world, 10.0, 9.0);
+    let shapes = Shapes::default().shapes(&world, 1.0);
+    let mut control = Control::new(0);
+    let at = on_screen(&world, &camera, tanks[1]);
+    control.select_alike(&world, &camera, &shapes, at, SCREEN, false);
+    assert_eq!(
+        control.selected.iter().copied().collect::<Vec<_>>(),
+        tanks,
+        "not the builder, the far tank or the enemy's"
+    );
+    assert!(
+        camera
+            .project(world.map(), middle(&world, far).unwrap(), SCREEN.width, SCREEN.height)
+            .is_none_or(|(x, y)| !(0.0..=SCREEN.width).contains(&x) || !(0.0..=SCREEN.height).contains(&y))
+    );
+    // With shift it adds them to the builder.
+    control.selected = [builder].into();
+    control.select_alike(&world, &camera, &shapes, at, SCREEN, true);
+    assert_eq!(control.selected.len(), 4);
 }
