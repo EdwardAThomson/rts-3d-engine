@@ -187,31 +187,35 @@ fn spot_site(ai: &Ai, world: &World, b: &Unit, r: usize, plans: &[Site]) -> Opti
     None
 }
 
-/// The first good site in rings round home. Within a ring, sites furthest from the rally point come first, so
-/// the base grows away from the enemy; ties go to row order.
+/// The first good site in rings round home, measured from home to the site's centre. Within a ring, sites
+/// furthest from the rally point come first, so the base grows away from the enemy; equally far sites are taken
+/// by which side of the line to the rally point they are on. Every key is measured from the base, so a base in
+/// any corner lays itself out as the mirror image of one in the opposite corner.
 fn ring_site(ai: &Ai, world: &World, kind: usize, plans: &[Site]) -> Option<Site> {
     let s = world.types()[kind].structure?;
-    let (hx, hy) = cell(ai.home());
+    let home = ai.home();
+    let (hx, hy) = cell(home);
     let rally = crate::army::rally(ai, world);
-    for r in 0..=ai.settings.search_radius {
-        let mut ring: Vec<(i64, i32, i32)> = Vec::new();
-        for dy in -r..=r {
-            for dx in -r..=r {
-                if dx.abs().max(dy.abs()) == r {
-                    let away = dist2(centre((hx + dx, hy + dy)), rally);
-                    ring.push((-away, dy, dx));
-                }
+    let (rx, ry) = (i64::from(rally.0 - home.0), i64::from(rally.1 - home.1));
+    let reach = ai.settings.search_radius;
+    let mut sites: Vec<(i32, i64, i64, i32, i32)> = Vec::new();
+    for cy in hy - reach - s.depth..=hy + reach {
+        for cx in hx - reach - s.width..=hx + reach {
+            let at = (cx * SUB + s.width * SUB / 2, cy * SUB + s.depth * SUB / 2);
+            let (ox, oy) = (at.0 - home.0, at.1 - home.1);
+            let ring = (ox.abs().max(oy.abs()) + SUB / 2) / SUB;
+            if ring > reach {
+                continue;
             }
-        }
-        ring.sort_unstable();
-        for (_, dy, dx) in ring {
-            let site = (kind, hx + dx - s.width / 2, hy + dy - s.depth / 2);
-            if site_free(world, site, plans, true) && !covers_spot(world, site) {
-                return Some(site);
-            }
+            let side = rx * i64::from(oy) - ry * i64::from(ox);
+            sites.push((ring, -dist2(at, rally), side, cy, cx));
         }
     }
-    None
+    sites.sort_unstable();
+    sites
+        .into_iter()
+        .map(|(.., cy, cx)| (kind, cx, cy))
+        .find(|&site| site_free(world, site, plans, true) && !covers_spot(world, site))
 }
 
 /// Whether a site can be built on now: the world allows it, it overlaps no plan, no ground unit stands on it, and

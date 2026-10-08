@@ -778,7 +778,7 @@ impl World {
             // The axis of the push, turned clockwise by about 27 degrees when either is moving, so idle units step
             // aside rather than being bulldozed along the mover's line.
             let (ax, ay) = if turn { (dx - dy / 2, dy + dx / 2) } else { (dx, dy) };
-            let along = |share: i64| ((ax * share).div_euclid(dist), (ay * share).div_euclid(dist));
+            let along = |share: i64| (ax * share / dist, ay * share / dist);
             let (pax, pay) = along(share_a);
             let (pbx, pby) = along(share_b);
             push[i].0 -= pax;
@@ -1144,6 +1144,26 @@ fn cell_of(map: &Heightmap, (x, y): (i32, i32)) -> (i32, i32) {
     ((x / SUB).clamp(0, map.width() - 1), (y / SUB).clamp(0, map.height() - 1))
 }
 
+/// The cell a mover at `(x, y)` steers from. A point exactly on a cell edge touches the cells on both sides; it
+/// counts as in whichever is cheaper to reach the goal from (ties to the cell `cell_of` gives), so a route and
+/// its mirror image step the same way.
+fn route_cell(map: &Heightmap, field: &FlowField, (x, y): (i32, i32)) -> (i32, i32) {
+    let (cx, cy) = cell_of(map, (x, y));
+    let xs = if x % SUB == 0 && cx > 0 { vec![cx, cx - 1] } else { vec![cx] };
+    let ys = if y % SUB == 0 && cy > 0 { vec![cy, cy - 1] } else { vec![cy] };
+    let mut best = (cx, cy);
+    let mut best_cost = field.cost(best);
+    for &ny in &ys {
+        for &nx in &xs {
+            let c = field.cost((nx, ny));
+            if c.is_some() && best_cost.is_none_or(|b| c < Some(b)) {
+                (best, best_cost) = ((nx, ny), c);
+            }
+        }
+    }
+    best
+}
+
 fn centre((cx, cy): (i32, i32)) -> (i32, i32) {
     (cx * SUB + SUB / 2, cy * SUB + SUB / 2)
 }
@@ -1166,7 +1186,7 @@ fn advance(
             ended = Some(MoveEnd::Arrived);
             break;
         }
-        let cell = cell_of(map, here);
+        let cell = route_cell(map, field, here);
         let target = if cell == field.goal() {
             goal
         } else {

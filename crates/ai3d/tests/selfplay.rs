@@ -134,7 +134,7 @@ fn two_opponents_play_the_same_game_every_time() {
 }
 
 /// Two opponents on skirmish seed 7 after 4000 ticks.
-const GOLDEN: &str = "1877c8d5";
+const GOLDEN: &str = "dbab117f";
 
 #[test]
 fn the_command_log_replays_the_game_without_the_opponents() {
@@ -154,5 +154,18 @@ fn four_players_all_get_going() {
     for p in 0..4 {
         assert_eq!(count(&world, p, FACTORY), 1, "player {p}");
         assert!(count(&world, p, EXTRACTOR) >= 3, "player {p}");
+    }
+}
+
+#[test]
+fn turning_the_seats_gives_each_player_the_other_corner() {
+    let corners = skirmish::starts(2);
+    for turn in 0..2u8 {
+        let world = skirmish::skirmish_turned(1, 2, turn);
+        for p in 0..2u8 {
+            let u = world.units().iter().find(|u| u.owner == p).unwrap();
+            let (x, y) = corners[usize::from((p + turn) % 2)];
+            assert!((u.pos.x - x).abs() <= SUB / 4 && (u.pos.y - y).abs() <= SUB / 4, "player {p}, turn {turn}");
+        }
     }
 }

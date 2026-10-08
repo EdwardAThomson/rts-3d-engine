@@ -226,3 +226,60 @@ fn move_ends(events: Vec<Event>) -> Vec<(u32, MoveEnd)> {
         })
         .collect()
 }
+
+/// A move and its mirror image, turned half a turn about the middle of the map, stay mirror images tick by tick:
+/// rounding and route choices favour no direction, so no corner of a mirrored map has an edge.
+#[test]
+fn a_move_and_its_mirror_image_stay_mirror_images() {
+    let size = 32;
+    let mirror = |(x, y): (i32, i32)| (size * SUB - x, size * SUB - y);
+    let mut rng = seed_state(5);
+    let mut cell = || (random_int(&mut rng, size as u32) as i32, random_int(&mut rng, size as u32) as i32);
+    let mut pairs = vec![((5, 7), (26, 20)), ((3, 3), (28, 9)), ((10, 2), (12, 29))];
+    pairs.extend((0..20).map(|_| (cell(), cell())));
+    for (from, to) in pairs {
+        let mut a = World::new(Heightmap::flat(size, size, 0), classes(), 1);
+        let mut b = World::new(Heightmap::flat(size, size, 0), classes(), 1);
+        let (fa, ta) = (centre(from.0, from.1), centre(to.0, to.1));
+        let (fb, tb) = (mirror(fa), mirror(ta));
+        let ua = a.spawn(TRACKED, fa.0, fa.1);
+        let ub = b.spawn(TRACKED, fb.0, fb.1);
+        a.command(Command::Move { unit: ua, x: ta.0, y: ta.1 });
+        b.command(Command::Move { unit: ub, x: tb.0, y: tb.1 });
+        for _ in 0..400 {
+            a.step();
+            b.step();
+            let (pa, pb) = (a.unit(ua).unwrap().pos, b.unit(ub).unwrap().pos);
+            assert_eq!(mirror((pa.x, pa.y)), (pb.x, pb.y), "{from:?} to {to:?}, tick {}", a.tick());
+        }
+    }
+}
+
+/// The same for a group that packs round its goal: steering pushes favour no direction either.
+#[test]
+fn a_group_move_and_its_mirror_image_stay_mirror_images() {
+    let size = 32;
+    let mirror = |(x, y): (i32, i32)| (size * SUB - x, size * SUB - y);
+    let mut a = World::new(Heightmap::flat(size, size, 0), classes(), 1);
+    let mut b = World::new(Heightmap::flat(size, size, 0), classes(), 1);
+    let goal = centre(24, 22);
+    let mut ids = Vec::new();
+    for i in 0..9 {
+        let p = centre(4 + i % 3, 5 + i / 3);
+        let q = mirror(p);
+        ids.push((a.spawn(TRACKED, p.0, p.1), b.spawn(TRACKED, q.0, q.1)));
+    }
+    let g = mirror(goal);
+    for &(ia, ib) in &ids {
+        a.command(Command::Move { unit: ia, x: goal.0, y: goal.1 });
+        b.command(Command::Move { unit: ib, x: g.0, y: g.1 });
+    }
+    for _ in 0..600 {
+        a.step();
+        b.step();
+        for &(ia, ib) in &ids {
+            let (pa, pb) = (a.unit(ia).unwrap().pos, b.unit(ib).unwrap().pos);
+            assert_eq!(mirror((pa.x, pa.y)), (pb.x, pb.y), "unit {ia}, tick {}", a.tick());
+        }
+    }
+}
