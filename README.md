@@ -14,4 +14,7 @@ and headless self-play on a generic skirmish:
 cargo run --release -p ai3d --bin selfplay -- --seeds 1..10
 ```
 
+`crates/view3d` has the renderer's groundwork, with no GPU code yet: a strategic-zoom camera, the terrain mesh and
+ground picking (docs/view.md).
+
 See `docs/ARCHITECTURE.md` for the plan and `CLAUDE.md` for the rules and commands.

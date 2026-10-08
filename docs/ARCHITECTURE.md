@@ -36,6 +36,7 @@ units per side; measurements decide whether we go further.
 | `ai3d` | The computer opponent (docs/ai.md): reads `&World`, gives orders only through `World::command`, and finds builders, factories, income and fighters from the unit data. Builders keep every resource coming in and add factories; factories build builders then fighters; fighters gather, defend and attack in growing waves. Also a generic skirmish (`ai3d::skirmish`) and the headless `selfplay` runner for balance runs. | Started |
 | `sim3d` | Intent orders in `world/intent.rs` (docs/intent.md): patrols that fight on the way and turn round, factories that keep a count of each unit type their owner wants, and units that fall back to a point when badly hurt. All are state, so they hash and replay like any order. | Started |
 | later: economy | Assisting factories, reclaiming frames, build priorities, rally points, upkeep. | Planned |
+| `view3d` | The renderer's groundwork, with no GPU code (docs/view.md): a strategic-zoom camera that tilts from an angled close view to straight down over the whole map and zooms at the cursor, the terrain mesh at full or coarser detail, and ground picking against the simulation's own heights. Floating point is fine here: it only reads the state. | Started |
 | later: renderer | wgpu, native and WebGPU, reading only `events` and snapshots, with strategic zoom from day one, on the platform layer shared with the Classic engine. | Planned |
 
 ## Roadmap
@@ -49,7 +50,7 @@ Agreed with Ed on 7 Oct 2026; the order can change as we learn.
 4. Intent orders: factory targets, fall-back rules, patrols that react (first version built: docs/intent.md).
 5. Renderer: wgpu with strategic zoom, on the platform layer shared with the Classic engine (window, input, GPU
    setup, textures, text, audio), which starts in `rts-engine` and moves to its own crate when this engine needs
-   it.
+   it. Started: `view3d` holds the parts that need no GPU.
 6. Polish: turrets and facing, formations, a high-ground range bonus, craters, saving games to disk.
 
 ## Decisions so far
