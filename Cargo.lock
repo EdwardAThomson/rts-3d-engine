@@ -1402,6 +1402,7 @@ dependencies = [
  "rts-platform",
  "sim3d",
  "view3d",
+ "wasm-bindgen-futures",
  "wgpu",
  "winit",
 ]
@@ -1420,7 +1421,7 @@ source = "git+https://github.com/EdwardAThomson/rts-core?rev=da80e8730d22dcd6f34
 [[package]]
 name = "rts-platform"
 version = "0.1.0"
-source = "git+https://github.com/EdwardAThomson/rts-core?rev=c7844f344840e2f8cf649ce5780e0a415e283fe6#c7844f344840e2f8cf649ce5780e0a415e283fe6"
+source = "git+https://github.com/EdwardAThomson/rts-core?rev=aa9c34a01b36116e2eb724b86e9a98dd39037b7a#aa9c34a01b36116e2eb724b86e9a98dd39037b7a"
 dependencies = [
  "js-sys",
  "pollster",

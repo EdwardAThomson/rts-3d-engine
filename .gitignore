@@ -2,3 +2,7 @@
 # The private setting pack is a separate private repository, cloned here. Never commit it.
 settings-private/
 *.log
+# The browser build, made by wasm-bindgen.
+/web/play3d/pkg/
+# Playwright for the browser check, installed without saving.
+/node_modules/

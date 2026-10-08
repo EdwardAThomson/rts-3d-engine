@@ -15,7 +15,7 @@ cargo clippy --all-targets -- -D warnings    # also enforces the determinism rul
 cargo fmt
 cargo build --release --target wasm32-unknown-unknown -p sim3d   # web build
 cargo run --release -p ai3d --bin selfplay -- --seeds 1..10      # computer-vs-computer balance runs
-cargo run --release -p render3d --bin play3d                     # watch a computer-vs-computer game in a window
+cargo run --release -p render3d --bin play3d                     # play a side with the mouse in a window (--watch 1 to watch)
 ```
 
 The toolchain is pinned in `rust-toolchain.toml`. Only the renderer (`render3d`) has third-party dependencies (wgpu,

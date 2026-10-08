@@ -14,9 +14,14 @@ publish.workspace = true
 sim3d = { path = "../sim3d" }
 view3d = { path = "../view3d" }
 ai3d = { path = "../ai3d" }
-rts-platform = { git = "https://github.com/EdwardAThomson/rts-core", rev = "c7844f344840e2f8cf649ce5780e0a415e283fe6", default-features = false }
+rts-platform = { git = "https://github.com/EdwardAThomson/rts-core", rev = "aa9c34a01b36116e2eb724b86e9a98dd39037b7a", default-features = false }
 wgpu = "30"
 winit = "0.30"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1"
+
+# The browser build: WebGL2 as well as WebGPU, and the bindings wgpu and winit already use to wait for the GPU.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "30", features = ["webgl"] }
+wasm-bindgen-futures = "0.4"
