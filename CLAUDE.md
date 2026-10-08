@@ -14,6 +14,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings    # also enforces the determinism rule below
 cargo fmt
 cargo build --release --target wasm32-unknown-unknown -p sim3d   # web build
+cargo run --release -p ai3d --bin selfplay -- --seeds 1..10      # computer-vs-computer balance runs
 ```
 
 The toolchain is pinned in `rust-toolchain.toml`. The workspace has no third-party dependencies; add one only

@@ -1,0 +1,11 @@
+[package]
+name = "ai3d"
+version = "0.1.0"
+description = "The computer opponent for sim3d, a generic skirmish to test it on, and headless self-play runs."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+sim3d = { path = "../sim3d" }
+rts-core = { git = "https://github.com/EdwardAThomson/rts-core", rev = "da80e8730d22dcd6f34194787e168b565982af4c" }

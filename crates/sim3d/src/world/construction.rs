@@ -63,6 +63,14 @@ impl World {
         (d - i64::from(self.types[u.kind].movement.radius)).max(0)
     }
 
+    /// Whether cell `(cx, cy)` is under a structure's footprint (cells off the map are not).
+    pub fn is_blocked(&self, cx: i32, cy: i32) -> bool {
+        let (w, h) = (self.map.width(), self.map.height());
+        (0..w).contains(&cx)
+            && (0..h).contains(&cy)
+            && self.blocked.get((cy * w + cx) as usize).copied().unwrap_or(false)
+    }
+
     /// Whether builder `i` is close enough to build unit `t`.
     pub(super) fn in_reach(&self, i: usize, t: usize) -> bool {
         let me = &self.units[i];
@@ -102,8 +110,9 @@ impl World {
     }
 
     /// Whether a structure of type `kind` can stand with its north-west cell at `(cx, cy)`: on the map, clear of
-    /// other structures, and with corners no further apart in height than it allows.
-    fn site_ok(&self, kind: usize, cx: i32, cy: i32) -> bool {
+    /// other structures, and with corners no further apart in height than it allows. Ground units standing there
+    /// don't count; a builder waits for them to leave.
+    pub fn site_ok(&self, kind: usize, cx: i32, cy: i32) -> bool {
         let Some(s) = self.types[kind].structure else { return false };
         let (w, h) = (self.map.width(), self.map.height());
         if cx < 0 || cy < 0 || cx + s.width > w || cy + s.depth > h {

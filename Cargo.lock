@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "ai3d"
+version = "0.1.0"
+dependencies = [
+ "rts-core",
+ "sim3d",
+]
+
+[[package]]
 name = "rts-core"
 version = "0.1.0"
 source = "git+https://github.com/EdwardAThomson/rts-core?rev=da80e8730d22dcd6f34194787e168b565982af4c#da80e8730d22dcd6f34194787e168b565982af4c"

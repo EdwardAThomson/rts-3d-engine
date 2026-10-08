@@ -287,6 +287,11 @@ impl World {
         &self.map
     }
 
+    /// The unit types, by kind.
+    pub fn types(&self) -> &[UnitType] {
+        &self.types
+    }
+
     pub fn tick(&self) -> u32 {
         self.tick
     }
