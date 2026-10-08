@@ -1,6 +1,6 @@
 //! Effects drawn from the world's `events`: a flash at the muzzle when a unit fires, a burst where a shot lands
 //! (bigger for a shell with splash), a blast where a unit is destroyed, and smoke rising from wrecks, with fire at
-//! the foot of a fallen building's for a while. Each is a handful of soft round blobs that face the camera
+//! the foot of a fallen building's for a while. A building going up also shakes the view for a moment (`shake`). Each is a handful of soft round blobs that face the camera
 //! (`Puff`), worked out with no GPU from the time since the event, so they are tested on their own. Like everything
 //! here they only read: nothing in `events` feeds back into the state. Sprite-particle effects of this kind are the
 //! genre's usual way; the code and numbers are ours.
@@ -32,6 +32,9 @@ pub const SMOKE_TICKS: [f32; 2] = [240.0, 900.0];
 /// A new puff of smoke every so many ticks, each rising for so long.
 const PUFF_EVERY: f32 = 5.0;
 const PUFF_LIFE: f32 = 75.0;
+/// How long the ground shakes after a building goes up, in ticks, and how far off it is felt, in cells.
+pub const SHAKE_TICKS: f32 = 24.0;
+const SHAKE_REACH: f32 = 24.0;
 /// The most effects kept at once; the oldest go first.
 const MAX_LIVE: usize = 2000;
 
@@ -73,6 +76,8 @@ pub struct Effects {
     smoke: Vec<Smoke>,
     /// Shots in flight and their splash, in sub-cell units, from when they were fired.
     splash: BTreeMap<u32, i32>,
+    /// Buildings that went up lately, which shake the view: where, when and how big.
+    quakes: Vec<(V3, f32, f32)>,
 }
 
 impl Effects {
@@ -99,8 +104,9 @@ impl Effects {
                     let structure = world.types()[w.kind].structure;
                     let size = structure.map_or(0.5, |s| 0.35 * s.width.max(s.depth) as f32);
                     if structure.is_some() {
-                        // A building goes up in a bigger blast than the unit's own.
+                        // A building goes up in a bigger blast than the unit's own, and the ground shakes.
                         self.start(Kind::Blast { size: size * 1.4 }, to_view(w.pos), born, wreck);
+                        self.quakes.push((to_view(w.pos), born, size));
                     }
                     let until = born + SMOKE_TICKS[usize::from(structure.is_some())];
                     let building = structure.is_some();
@@ -123,6 +129,22 @@ impl Effects {
 
     fn start(&mut self, kind: Kind, at: V3, born: f32, seed: u32) {
         self.live.push(Effect { kind, at, born, seed });
+    }
+
+    /// How far the view shakes at `now` when it looks at `focus`, in cells: from each building that went up lately,
+    /// strongest at first and close by, dying away over `SHAKE_TICKS` and `SHAKE_REACH`.
+    pub fn shake(&mut self, now: f32, focus: V3) -> f32 {
+        self.quakes.retain(|q| now - q.1 < SHAKE_TICKS);
+        self.quakes
+            .iter()
+            .filter(|q| now >= q.1)
+            .map(|&(at, born, size)| {
+                let d = ((at[0] - focus[0]).powi(2) + (at[1] - focus[1]).powi(2)).sqrt();
+                let fade = (1.0 - (now - born) / SHAKE_TICKS).powi(2);
+                0.12 * size * fade * (1.0 - d / SHAKE_REACH).max(0.0)
+            })
+            .sum::<f32>()
+            .min(0.4)
     }
 
     /// How many effects and smoking wrecks are playing.

@@ -101,3 +101,21 @@ fn fights_make_shots_hits_and_blasts_and_only_your_own_building_chimes() {
     mixer.render(&mut out, 2);
     assert!(out.iter().any(|s| s.abs() > 0.05));
 }
+
+#[test]
+fn a_building_going_up_rumbles_on_after_the_blast() {
+    let rms = |c: &rts_platform::wav::Clip, from: f32, to: f32| {
+        let s = &c.samples[(from * c.rate as f32) as usize..(to * c.rate as f32) as usize];
+        (s.iter().map(|v| v * v).sum::<f32>() / s.len() as f32).sqrt()
+    };
+    let (building, vehicle) = (clip(Cue::BigBlast), clip(Cue::Blast));
+    let tail = rms(&building, 1.2, 2.4);
+    assert!(tail > 0.08, "the rumble carries on: {tail}");
+    // Low: it crosses zero far less often than the blast's crack does.
+    let crossings = |c: &rts_platform::wav::Clip, from: f32, to: f32| {
+        let s = &c.samples[(from * c.rate as f32) as usize..(to * c.rate as f32) as usize];
+        s.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count() as f32 / (to - from)
+    };
+    assert!(crossings(&building, 1.2, 2.4) < 120.0, "{} a second", crossings(&building, 1.2, 2.4));
+    assert!(tail > 4.0 * rms(&vehicle, 1.0, 1.15), "a vehicle's blast has no such tail");
+}

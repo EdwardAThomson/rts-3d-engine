@@ -339,6 +339,13 @@ impl App {
         run.renderer.set_overlay(&overlay);
         let now = self.world.tick() as f32 - 1.0 + alpha;
         run.renderer.set_effects(&self.effects.puffs(&self.world, now, self.camera.pose().eye));
+        // A building going up nearby shakes the view, for this frame's picture only; clicks use the steady camera.
+        let mut seen = self.camera.clone();
+        let shake = self.effects.shake(now, seen.focus);
+        if shake > 0.0 {
+            seen.focus[0] += shake * (now * 2.1).sin();
+            seen.focus[1] += shake * (now * 2.9 + 1.0).cos();
+        }
         run.renderer.set_area(Some((scene.width as u32, scene.height as u32)));
         let texture = match run.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -354,7 +361,7 @@ impl App {
         let control = self.control.as_ref();
         self.panel.draw(&run.gpu, &mut run.batch, &run.font, &self.world, control, &self.camera, screen, &state);
         run.batch.draw(&run.gpu, &view, size.0, size.1, [SKY[0], SKY[1], SKY[2], 255]);
-        run.renderer.draw(&run.gpu, &view, size, &self.world, &self.camera, &shapes, SKY);
+        run.renderer.draw(&run.gpu, &view, size, &self.world, &seen, &shapes, SKY);
         run.gpu.queue.present(texture);
         run.window.set_title(&title);
         #[cfg(target_arch = "wasm32")]

@@ -60,10 +60,12 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    for a building), and smoke rising from every wreck, a vehicle's for 8 seconds and a building's for 30, with fire
    at a building's foot for the first third; smoke stops when the wreck is cleared. The renderer draws them last,
    tested against depth so hills and models hide them, without writing it; fire and flashes add light, smoke
-   covers what is behind it, farthest first.
+   covers what is behind it, farthest first. A building going up also shakes the view for under a second, most when
+   it is near the middle of the view (`shake`); only the picture moves, so clicks still land where they point.
 10. **Sound comes from `events` too.** `sound` makes its clips in code (generic placeholders until a setting pack
    brings its own) and plays them through `rts-platform`'s mixer: a crack for a shot, a boom for a shell, a thud
-   where it lands, a blast when a unit is destroyed and a bigger one for a building, and for your own side only, a
+   where it lands, a blast when a unit is destroyed and a bigger one for a building with a deep rumble that rolls on
+   for a couple of seconds, and for your own side only, a
    clunk when a frame is placed and a chime when something is finished. Battle sounds are loudest near the middle
    of the view, fade over the ground it covers, are quieter off screen and when pulled right back, and pan to where
    on screen they happen. The sound card (the `sound` feature, on by default) opens at the start on the desktop and
@@ -110,4 +112,6 @@ Escape stops it, the helper's switch turns it off, M mutes, and the wheel zooms.
 - Icons when zoomed far out; the detailed models close in.
 - Models for other settings, read from a setting pack instead of built into the program.
 - Sounds and effects from a setting pack instead of made in code; music.
+- Real projectiles in place of the small boxes that stand in for shots today: a tracer for a gun, a shell with a
+  smoke trail for artillery (Ed, 8 Oct 2026: fine as placeholders, not for the real thing).
 - Units tilted to the slope they stand on; today a level box sinks into a hillside.

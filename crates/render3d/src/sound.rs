@@ -1,5 +1,5 @@
 //! Sound from the world's `events`: a crack for a shot, a boom for a shell, a thud where it lands, a blast when a
-//! unit is destroyed (a bigger one for a building), and for your own side a chime when something is finished and
+//! unit is destroyed (a bigger one with a long low rumble for a building), and for your own side a chime when something is finished and
 //! a clunk when a builder places a frame. Played through the platform's mixer, louder near the middle of the view
 //! and panned to where on screen it happened. The clips are made in code, generic placeholders until a setting
 //! pack brings its own. Like the effects they only read: nothing in `events` feeds back into the state.
@@ -125,13 +125,15 @@ pub fn clip(cue: Cue) -> Clip {
         Cue::Shell => (0.6, 2),
         Cue::Hit => (0.3, 3),
         Cue::Blast => (1.2, 4),
-        Cue::BigBlast => (2.2, 5),
+        Cue::BigBlast => (2.8, 5),
         Cue::Built => (0.45, 6),
         Cue::Placed => (0.2, 7),
     };
     let n = (seconds * RATE as f32) as usize;
     let mut noise = Noise(seed);
     let mut low = 0.0f32;
+    // A much darker filter, two poles deep, for a building's long rumble.
+    let (mut dark, mut deep) = (0.0f32, 0.0f32);
     let mut samples = Vec::with_capacity(n);
     let tau = std::f32::consts::TAU;
     for i in 0..n {
@@ -144,6 +146,8 @@ pub fn clip(cue: Cue) -> Clip {
             _ => 0.06,
         };
         low += k * (w - low);
+        dark += 0.006 * (w - dark);
+        deep += 0.006 * (dark - deep);
         let s = match cue {
             Cue::Shot => 0.9 * w * (-t * 40.0).exp() + 0.6 * (tau * 120.0 * t).sin() * (-t * 25.0).exp(),
             Cue::Shell => 0.8 * low * (-t * 7.0).exp() + 0.8 * (tau * 55.0 * t).sin() * (-t * 9.0).exp(),
@@ -153,8 +157,14 @@ pub fn clip(cue: Cue) -> Clip {
                     + 0.6 * (tau * 42.0 * t).sin() * (-t * 4.0).exp()
             }
             Cue::BigBlast => {
-                3.4 * low * (-t * 2.0).exp() * (1.0 - (-t * 40.0).exp())
-                    + 0.7 * (tau * 33.0 * t).sin() * (-t * 2.5).exp()
+                // The blast, then a deep rumble that swells and rolls on under it: filtered noise and a low tone
+                // that wavers.
+                let rumble = (1.0 - (-t * 6.0).exp()) * (-t * 1.1).exp();
+                let waver = 1.0 + 0.3 * (tau * 3.0 * t).sin();
+                // Rounded off rather than clipped where the two add up.
+                (3.4 * low * (-t * 3.5).exp() * (1.0 - (-t * 40.0).exp())
+                    + rumble * (30.0 * deep + 0.6 * (tau * 28.0 * t).sin() * waver))
+                    .tanh()
             }
             Cue::Built => {
                 let f = if t < 0.15 { 660.0 } else { 880.0 };

@@ -2,7 +2,7 @@
 
 use ai3d::skirmish::{self, ARTILLERY, BUILDER, EXTRACTOR, TANK};
 use render3d::Renderer;
-use render3d::effects::{BURST_TICKS, Effects, FLASH_TICKS, Puff, SMOKE_TICKS};
+use render3d::effects::{BURST_TICKS, Effects, FLASH_TICKS, Puff, SHAKE_TICKS, SMOKE_TICKS};
 use render3d::shapes::Shapes;
 use rts_platform::Gpu;
 use rts_platform::gpu::OFFSCREEN_FORMAT;
@@ -97,6 +97,13 @@ fn a_wrecked_building_blasts_then_smokes_until_its_time_is_up_or_it_is_cleared()
     });
     let born = world.tick() as f32 - 1.0;
     let at = view3d::to_view(world.wrecks().iter().find(|w| w.id == wreck).unwrap().pos);
+
+    // The view shakes, most when looking right at it, and settles.
+    let close = fx.shake(born + 1.0, at);
+    let off = fx.shake(born + 1.0, [at[0] + 12.0, at[1], 0.0]);
+    assert!(close > 0.02 && off > 0.0 && off < close / 1.5, "{close} close, {off} further off");
+    assert!(fx.shake(born + SHAKE_TICKS / 2.0, at) < close / 2.0);
+    assert_eq!(fx.shake(born + SHAKE_TICKS + 1.0, at), 0.0);
     let near = |p: &Puff| (p.at[0] - at[0]).abs() < 1.5 && (p.at[1] - at[1]).abs() < 1.5;
     assert!(glows(&fx.puffs(&world, born + 2.0, EYE)).iter().filter(|p| near(p)).count() >= 5, "a blast of fire");
 
