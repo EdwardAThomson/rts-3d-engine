@@ -18,3 +18,21 @@ cargo run --release -p ai3d --bin selfplay -- --seeds 1..10
 ground picking (docs/view.md).
 
 See `docs/ARCHITECTURE.md` for the plan and `CLAUDE.md` for the rules and commands.
+
+## Install and run
+
+You need [rustup](https://rustup.rs); the first `cargo` command here installs the toolchain pinned in
+`rust-toolchain.toml` (Rust 1.97 with clippy, rustfmt and the WebAssembly target). The simulation, AI and view
+crates have no other requirements.
+
+```bash
+cargo test                                                       # every check
+cargo run --release -p ai3d --bin selfplay -- --seeds 1..10      # computer-vs-computer games on the generic skirmish, no window
+cargo run --release -p ai3d --bin selfplay -- --seed 1 --ticks 36000 --every 3000   # one game, with a line every 3,000 ticks
+cargo build --release --target wasm32-unknown-unknown -p sim3d   # the simulation's WebAssembly build
+```
+
+There is no window to play in on `main` yet. The renderer in pull request #12 adds one
+(`cargo run --release -p render3d --bin play3d`); it draws with wgpu, so it needs a GPU driver (Vulkan, Metal or
+DirectX 12), or Mesa's software GPU and a virtual display on a machine without one
+(`sudo apt-get install mesa-vulkan-drivers xvfb`, then `xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 120`).
