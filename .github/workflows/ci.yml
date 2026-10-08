@@ -27,7 +27,7 @@ jobs:
       - run: cargo test
       - run: cargo build --release --target wasm32-unknown-unknown -p sim3d
       - name: The viewer opens a window and draws
-        run: xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 60 --speed 8
+        run: xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 60 --speed 8 --menu 0
       - run: cargo clippy --target wasm32-unknown-unknown -p render3d -- -D warnings
       # The same viewer in headless Chromium, drawing with WebGPU and then WebGL2 on its software GPU. wasm-bindgen's
       # command-line tool must match the library version in Cargo.lock.

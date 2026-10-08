@@ -7,6 +7,7 @@
 //!   its own. Units, structures and frames, projectiles, wrecks and resource spots each get a box.
 //! - `model`: the art studio's models read from glTF files, and where each is drawn over its unit's shape. `json`
 //!   reads their headers.
+//! - `menu`: the start menu and the game-over panel, in the side panel's place.
 //! - `panel`: the side panel: a minimap, the side's stock, buttons for what the selection builds, and placing a
 //!   structure; drawn with the platform's sprite batch beside the scene.
 //! - `sound`: sounds made in code for shots, hits, blasts and your side's building, played through the platform's
@@ -17,6 +18,7 @@
 pub mod control;
 pub mod effects;
 pub mod json;
+pub mod menu;
 pub mod model;
 mod model_gpu;
 pub mod panel;

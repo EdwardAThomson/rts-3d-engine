@@ -77,6 +77,13 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    on screen they happen. The sound card (the `sound` feature, on by default) opens at the start on the desktop and
    on the first click or key in the browser, which only allows sound after one; with no sound card the viewer is
    silent. M mutes.
+11. **The menu and the game-over panel take the panel's place.** `menu` draws the start menu in the same spot as
+   the panel, with the same batch and font: the map seed (1 to 999), the number of players (2 to 4), the helper and
+   watching only, each a button that steps on with a click and back with a right-click, then Start. Beside it the
+   scene shows the map those options make, turning slowly. When one side is left, the game-over panel shows who won,
+   how long it took, and what each side built and lost (`menu::Tally`, counted from `Built` and `Destroyed`
+   events), with Play again (the same options) and Menu. Clicks are worked out with no GPU. Enter starts from the
+   menu and plays again once the game is over.
 
 ## The viewer
 
@@ -84,6 +91,7 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 cargo run --release -p render3d --bin play3d -- --seed 1 --players 2
 ```
 
+It opens on the start menu (rule 11); the command line's options fill it in, and `--menu 0` (`?menu=0`) skips it.
 You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) against computer players. Left-click
 a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
 to attack it or the ground to move there, with Ctrl held to attack-move. Double-click a unit to select all of its
@@ -112,8 +120,8 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 `wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
 Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
-Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, and the
-wheel zooms. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
+Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, the
+wheel zooms, and, with the menu on, the page opens on it, a row steps on and Start begins the game. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
 store; that is still open.
 
 ## Later
