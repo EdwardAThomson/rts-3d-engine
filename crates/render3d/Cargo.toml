@@ -1,0 +1,22 @@
+[package]
+name = "render3d"
+version = "0.1.0"
+description = "Draws a 3D engine game with wgpu on the shared platform layer, and the desktop viewer. Reads the game state; never changes it."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The renderer is the one part of this engine with third-party dependencies (Ed chose wgpu, 2026-10-07): wgpu draws on
+# every desktop GPU API and on the web, winit opens the window, and pollster waits for wgpu's async set-up. The GPU
+# set-up itself comes from `rts-platform`, the platform layer shared with the Classic engine (Ed, 2026-10-08), with no
+# sound yet so nothing needs ALSA to build. The simulation crates still have no dependencies beyond rts-core.
+[dependencies]
+sim3d = { path = "../sim3d" }
+view3d = { path = "../view3d" }
+ai3d = { path = "../ai3d" }
+rts-platform = { git = "https://github.com/EdwardAThomson/rts-core", rev = "c7844f344840e2f8cf649ce5780e0a415e283fe6", default-features = false }
+wgpu = "30"
+winit = "0.30"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "1"

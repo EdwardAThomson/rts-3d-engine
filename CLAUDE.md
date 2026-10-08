@@ -15,10 +15,12 @@ cargo clippy --all-targets -- -D warnings    # also enforces the determinism rul
 cargo fmt
 cargo build --release --target wasm32-unknown-unknown -p sim3d   # web build
 cargo run --release -p ai3d --bin selfplay -- --seeds 1..10      # computer-vs-computer balance runs
+cargo run --release -p render3d --bin play3d                     # watch a computer-vs-computer game in a window
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`. The workspace has no third-party dependencies; add one only
-when it clearly pays for itself.
+The toolchain is pinned in `rust-toolchain.toml`. Only the renderer (`render3d`) has third-party dependencies (wgpu,
+winit, and `rts-platform` from the rts-core repository); add another only when it clearly pays for itself. Its
+tests draw offscreen and need a GPU adapter; Mesa's software one will do.
 
 ## Rules
 

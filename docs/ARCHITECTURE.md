@@ -37,7 +37,8 @@ units per side; measurements decide whether we go further.
 | `sim3d` | Intent orders in `world/intent.rs` (docs/intent.md): patrols that fight on the way and turn round, factories that keep a count of each unit type their owner wants, and units that fall back to a point when badly hurt. All are state, so they hash and replay like any order. | Started |
 | later: economy | Assisting factories, reclaiming frames, build priorities, rally points, upkeep. | Planned |
 | `view3d` | The renderer's groundwork, with no GPU code (docs/view.md): a strategic-zoom camera that tilts from an angled close view to straight down over the whole map and zooms at the cursor, the terrain mesh at full or coarser detail, and ground picking against the simulation's own heights. Floating point is fine here: it only reads the state. | Started |
-| later: renderer | wgpu, native and WebGPU, reading only `events` and snapshots, with strategic zoom from day one, on the platform layer shared with the Classic engine. | Planned |
+| `render3d` | The renderer (docs/render.md): the terrain and a box for every unit, frame, shot, wreck and spot, drawn with wgpu on `rts-platform` (the platform layer shared with the Classic engine, in the `rts-core` repository), sliding between ticks; tested offscreen. The `play3d` viewer shows computer players fighting the generic skirmish. | Started |
+| later: renderer | Playing with the mouse, models from the art studio, a HUD, sound, effects from `events`, the browser build. | Planned |
 
 ## Roadmap
 
@@ -49,8 +50,8 @@ Agreed with Ed on 7 Oct 2026; the order can change as we learn.
 3. A simple AI and headless self-play runs for balance numbers (first version built: `ai3d`, docs/ai.md).
 4. Intent orders: factory targets, fall-back rules, patrols that react (first version built: docs/intent.md).
 5. Renderer: wgpu with strategic zoom, on the platform layer shared with the Classic engine (window, input, GPU
-   setup, textures, text, audio), which starts in `rts-engine` and moves to its own crate when this engine needs
-   it. Started: `view3d` holds the parts that need no GPU.
+   setup, textures, text, audio), now the `rts-platform` crate in the `rts-core` repository. Started: `view3d`
+   (camera, terrain mesh, picking) and `render3d` (drawing and a viewer).
 6. Polish: turrets and facing, formations, a high-ground range bonus, craters, saving games to disk.
 
 ## Decisions so far
