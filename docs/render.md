@@ -22,7 +22,17 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 5. **Tested offscreen.** `Renderer::draw_to_image` draws with no window on any adapter, a software one included.
    The tests check the map against the sky, each player's colour where their units are, that a ridge hides a unit
    behind it, and leave frames in `target/` to look at.
-6. **Playing goes through `control`, with no GPU.** Selecting and ordering are worked out from the world, the
+6. **Models stand in for boxes.** `model` reads the binary glTF files (`.glb`) the art studio's exporter writes
+   (rts-engine, `art/studio/export_gltf.py --lod low`) with a small reader of our own and `png` for the baked
+   textures. Each kind of the generic skirmish has one (`assets/skirmish/models/`, listed in `models.json` by kind
+   name with the source studio model). Every model is drawn at one size per metre (`metres_per_cell`, the studio's
+   10.67 metres to a tile), except that a building shrinks if it would not fit its footprint. A mobile unit faces the
+   way it last moved (the simulation keeps no facing, so `Shapes` works it out from its moves), and a turret turns
+   to its target. Team paint, baked grey, is multiplied by the owner's colour. A frame is the finished model, pale,
+   rising from the ground as it is built. Kinds with no model, shots, wrecks and resource spots stay boxes. Textures
+   get mipmaps so small far-off units don't shimmer. WebGL2 can't offset indices per draw, so each model's
+   indices count from the start of its own buffer.
+7. **Playing goes through `control`, with no GPU.** Selecting and ordering are worked out from the world, the
    camera and the shapes on screen, so they are tested without an adapter. The cursor's ray picks the nearest unit
    or frame box it enters, unless the ground (by `view3d::pick`, on the simulation's own heights) is nearer; a box
    selects every unit of yours whose middle projects inside it. Orders go in as ordinary commands in sub-cell
@@ -41,7 +51,8 @@ to attack it or the ground to move there, with Ctrl held to attack-move. A compu
 player) runs your base and factories and sends waves with the fighters you leave to it; once you give a unit an
 order it is yours alone, and the helper's orders for it are dropped. That lets you play before there is a HUD for
 building, an idea we take from Supreme Commander's and Total Annihilation's automation of the chores. `--watch 1`
-(`?watch=1` in the browser) leaves every side to the computer. The wheel zooms at the cursor, arrow keys or WASD
+(`?watch=1` in the browser) leaves every side to the computer, and `--boxes 1` draws boxes in place of the models.
+The wheel zooms at the cursor, arrow keys or WASD
 pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape quits.
 The game runs at 30 ticks a second of game time; that rate is the viewer's choice, since the simulation has no
 clock.
@@ -63,7 +74,8 @@ Space pauses, a drag selects, a right-click opens no browser menu and the wheel 
 
 - Building and production from a HUD, so the helper can be switched off; double-click to select every unit of a
   kind on screen; control groups.
-- Models from the art studio's glTF exports in place of boxes, with icons when zoomed far out.
+- Wrecks drawn as their unit's model, burnt; icons when zoomed far out; the detailed models close in.
+- Models for other settings, read from a setting pack instead of built into the program.
 - A HUD with the sprite batcher and font from `rts-platform`, and sound from its mixer.
 - Effects from `events`: muzzle flashes, impacts, wrecks burning.
 - Units tilted to the slope they stand on; today a level box sinks into a hillside.

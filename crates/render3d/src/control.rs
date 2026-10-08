@@ -168,11 +168,9 @@ impl Control {
         shapes
             .iter()
             .filter(|s| matches!(s.part, Part::Unit(id) if self.selected.contains(&id)))
-            .map(|s| Shape {
-                part: s.part,
-                min: [s.min[0] - RIM, s.min[1] - RIM, s.min[2] - 0.05],
-                max: [s.max[0] + RIM, s.max[1] + RIM, s.min[2] + 0.04],
-                colour: SELECTED,
+            .map(|s| {
+                let min = [s.min[0] - RIM, s.min[1] - RIM, s.min[2] - 0.05];
+                Shape::plain(s.part, min, [s.max[0] + RIM, s.max[1] + RIM, s.min[2] + 0.04], SELECTED)
             })
             .collect()
     }

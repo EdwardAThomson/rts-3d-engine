@@ -10,6 +10,8 @@ use view3d::maths::normalize;
 use view3d::terrain;
 
 use crate::control::Rect;
+use crate::model::Models;
+use crate::model_gpu::ModelDrawer;
 use crate::shapes::Shape;
 
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -37,6 +39,7 @@ pub struct Renderer {
     terrain_pipeline: wgpu::RenderPipeline,
     box_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    models: ModelDrawer,
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
     meshes: Vec<Mesh>,
@@ -180,8 +183,10 @@ impl Renderer {
             buffer(gpu, "cube", &corners, wgpu::BufferUsages::VERTEX),
             buffer(gpu, "cube", &indices, wgpu::BufferUsages::INDEX),
         );
+        let models = ModelDrawer::new(gpu, format, &shader, &globals_layout, DEPTH);
         Renderer {
             terrain_pipeline,
+            models,
             box_pipeline,
             overlay_pipeline,
             globals,
@@ -193,6 +198,11 @@ impl Renderer {
             overlay: Vec::new(),
             flats: None,
         }
+    }
+
+    /// Draw each unit kind that has a model with it from now on, in place of its box.
+    pub fn set_models(&mut self, gpu: &Gpu, models: Models) {
+        self.models.set(gpu, models);
     }
 
     /// Rectangles to draw over the scene from the next frame on, in pixels from the top left; empty for none.
@@ -241,6 +251,10 @@ impl Renderer {
                 count: m.indices.len() as u32,
             });
         }
+        // Units with a model are drawn with it; everything else is a box.
+        self.models.prepare(gpu, shapes);
+        let boxes: Vec<Shape> = shapes.iter().filter(|s| !self.models.draws(s)).copied().collect();
+        let shapes = &boxes[..];
         if !shapes.is_empty() {
             self.upload(gpu, shapes);
         }
@@ -297,6 +311,7 @@ impl Renderer {
                 pass.set_index_buffer(self.cube.1.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..36, 0, 0..shapes.len() as u32);
             }
+            self.models.draw(&mut pass);
             if let Some(flats) = self.flats.as_ref().filter(|_| !self.overlay.is_empty()) {
                 pass.set_pipeline(&self.overlay_pipeline);
                 pass.set_vertex_buffer(0, flats.slice(..));
@@ -417,7 +432,7 @@ impl Renderer {
 }
 
 /// A buffer holding `bytes`.
-fn buffer(gpu: &Gpu, label: &str, bytes: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+pub(crate) fn buffer(gpu: &Gpu, label: &str, bytes: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
     let b = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         // Copies go in whole words.

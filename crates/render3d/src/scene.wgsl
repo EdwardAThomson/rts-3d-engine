@@ -91,3 +91,49 @@ fn vs_overlay(@builtin(vertex_index) i: u32, @location(0) rect: vec4<f32>, @loca
 fn fs_overlay(in: Flat) -> @location(0) vec4<f32> {
     return in.colour;
 }
+
+// Models from the art studio, each piece an instance placed by its own matrix, lit like everything else. Team paint
+// is baked grey and takes the owner's colour; a frame still being built is drawn pale.
+@group(1) @binding(0) var albedo: texture_2d<f32>;
+@group(1) @binding(1) var albedo_sampler: sampler;
+
+struct Model {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) team: f32,
+    // rgb: the owner's colour; a: 1 for a frame.
+    @location(3) paint: vec4<f32>,
+};
+
+@vertex
+fn vs_model(
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) team: f32,
+    @location(4) c0: vec4<f32>,
+    @location(5) c1: vec4<f32>,
+    @location(6) c2: vec4<f32>,
+    @location(7) c3: vec4<f32>,
+    @location(8) paint: vec4<f32>,
+) -> Model {
+    let m = mat4x4<f32>(c0, c1, c2, c3);
+    var out: Model;
+    out.clip = globals.view_proj * m * vec4<f32>(pos, 1.0);
+    out.normal = (m * vec4<f32>(normal, 0.0)).xyz;
+    out.uv = uv;
+    out.team = team;
+    out.paint = paint;
+    return out;
+}
+
+@fragment
+fn fs_model(in: Model) -> @location(0) vec4<f32> {
+    let base = textureSample(albedo, albedo_sampler, in.uv).rgb;
+    // The baked grey is about half white, so twice the colour times the grey gives back the colour at full strength.
+    let painted = mix(base, min(base * in.paint.rgb * 2.0, vec3<f32>(1.0)), in.team);
+    let colour = mix(painted, vec3<f32>(1.0), 0.5 * in.paint.a);
+    let light = 0.3 + 0.7 * max(dot(normalize(in.normal), globals.sun.xyz), 0.0);
+    return vec4<f32>(colour * light, 1.0);
+}

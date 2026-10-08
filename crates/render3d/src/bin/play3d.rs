@@ -1,5 +1,6 @@
 //! The viewer: a generic skirmish in a window, with you playing the first side (blue) against computer players.
 //!   cargo run --release -p render3d --bin play3d -- [--seed 1] [--players 2] [--speed 1] [--frames N] [--watch 1]
+//!       [--boxes 1]
 //!
 //! The same program runs in the browser (`web/play3d/`, see docs/render.md), drawing with WebGPU or WebGL2 into the
 //! page's canvas, with the options in the page address instead: `?seed=3&players=4&speed=8`.
@@ -7,7 +8,8 @@
 //! Left-click a unit of yours to select it, or drag a box round several; shift adds to the selection. Right-click an
 //! enemy to attack it or the ground to move there; with Ctrl held, they attack-move and fight on the way. A computer
 //! helper runs your base and factories, and a unit is yours alone once you give it an order (see `control`).
-//! `--watch 1` leaves every side to the computer.
+//! `--watch 1` leaves every side to the computer. Units are drawn with the art studio's models; `--boxes 1` draws
+//! the plain boxes instead.
 //!
 //! The mouse wheel zooms at the cursor, from a few units up to the whole map. Arrow keys or WASD pan, Q and E turn the
 //! camera, space pauses, + and - change the game speed, Home shows the whole map again and Escape quits. The title
@@ -251,7 +253,11 @@ impl App {
             config.format = f;
         }
         surface.configure(&gpu.device, &config);
-        let renderer = Renderer::new(&gpu, config.format);
+        let mut renderer = Renderer::new(&gpu, config.format);
+        // The art studio's models stand in for the boxes, unless `--boxes 1` asks for the boxes.
+        if !arg("boxes").is_some_and(|b| b != "0") {
+            renderer.set_models(&gpu, render3d::model::Models::skirmish());
+        }
         self.run = Some(Running { window, surface, config, gpu, renderer });
         self.last = Instant::now();
     }
