@@ -21,11 +21,15 @@ are our own.
    of its maximum, it drops what it is doing (target, attack-move, patrol, build) and moves to the point. It acts
    when health crosses the line, not on every hit, so a unit sent back into the fight below the line stays
    there. A percent of 0 drops the rule.
+5. **Rally** (`Command::Rally`), a standing rule for a factory of mobile units. Every unit it finishes moves to
+   the point (an ordinary move, so it does not stop to fight on the way). A point off the map is moved onto its
+   edge. `None` drops the rule. Total Annihilation's factory waypoints are the inspiration.
 
 ## Order of a tick
 
 Fall-back rules run right after damage, before anyone moves. Patrols turn round right after moves end. Factory
-rules run at the start of the economy step, before anything is paid for.
+rules run at the start of the economy step, before anything is paid for. A rallied unit gets its goal the
+tick it is finished, so it starts moving the next tick.
 
 ## Later
 

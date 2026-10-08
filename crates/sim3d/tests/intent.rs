@@ -170,6 +170,50 @@ fn a_hurt_unit_falls_back_once_when_its_health_drops_below_the_line() {
 }
 
 #[test]
+fn units_from_a_rallied_factory_head_for_the_rally_point() {
+    let mut world = world();
+    let f = spawn(&mut world, 0, FACTORY, 4, 4);
+    let point = centre(16, 14);
+    world.command(Command::Rally { unit: f, point: Some(point) });
+    world.command(Command::Produce { unit: f, kind: SCOUT, repeat: false });
+    world.command(Command::Produce { unit: f, kind: SCOUT, repeat: false });
+    let events = run(&mut world, 500);
+    let built: Vec<u32> = events
+        .iter()
+        .filter_map(|(_, e)| match *e {
+            Event::Built { by, unit } if by == f => Some(unit),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(built.len(), 2);
+    for &id in &built {
+        let u = world.unit(id).unwrap();
+        assert!((u.pos.x - point.0).abs() <= SUB && (u.pos.y - point.1).abs() <= SUB, "scout {id} reached it");
+    }
+
+    // Dropping the rule leaves new units by the factory.
+    world.command(Command::Rally { unit: f, point: None });
+    world.command(Command::Produce { unit: f, kind: SCOUT, repeat: false });
+    let events = run(&mut world, 200);
+    let late = events.iter().find_map(|(_, e)| match *e {
+        Event::Built { by, unit } if by == f => Some(unit),
+        _ => None,
+    });
+    let u = world.unit(late.expect("a third scout")).unwrap();
+    assert_eq!(u.goal, None);
+    assert!((u.pos.y - centre(4, 4).1).abs() <= 2 * SUB, "it stayed by the factory");
+}
+
+#[test]
+fn only_a_factory_of_mobile_units_takes_a_rally_point() {
+    let mut world = world();
+    let scout = spawn(&mut world, 0, SCOUT, 4, 4);
+    world.command(Command::Rally { unit: scout, point: Some(centre(10, 10)) });
+    world.step();
+    assert_eq!(world.unit(scout).unwrap().rally, None);
+}
+
+#[test]
 fn intent_orders_replay_exactly() {
     let mut world = world();
     let f = spawn(&mut world, 0, FACTORY, 4, 4);
@@ -177,6 +221,7 @@ fn intent_orders_replay_exactly() {
     spawn(&mut world, 1, GUNNER, 18, 18);
     let start = world.clone();
     world.command(Command::Keep { unit: f, kind: GUNNER, count: 2 });
+    world.command(Command::Rally { unit: f, point: Some(centre(12, 4)) });
     world.command(Command::Patrol { unit: g, x: centre(20, 20).0, y: centre(20, 20).1 });
     world.command(Command::FallBack { unit: g, percent: 60, x: centre(1, 1).0, y: centre(1, 1).1 });
     run(&mut world, 800);

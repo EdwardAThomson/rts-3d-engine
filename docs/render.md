@@ -41,7 +41,13 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    units, so nothing new reaches replays or the state hash. A selected unit gets a pale plate under it, and the
    drag box is flat rectangles drawn over the scene. A click also selects one of your structures, but a box takes
    only mobile units, and only mobile units take move and attack orders. Right-clicking a frame of yours sends the
-   selected builders to help build it, and a wreck, to reclaim it.
+   selected builders to help build it, and a wreck, to reclaim it. A double click selects every unit or structure
+   of yours of that kind on screen. Right-clicking the ground with a factory selected sets its rally point
+   (`Command::Rally`, docs/intent.md), drawn as a flag on a post while the factory is selected; units it finishes
+   there are the person's, so the helper leaves them be. Ctrl and a number key keep the selection as a control
+   group, the number selects the group again (shift adds it, an empty group changes nothing), and a second press
+   within 0.4 seconds looks at the group's middle. Control groups and the double click are the viewer's own
+   state; only rally points reach the simulation.
 8. **The panel sits beside the scene.** `panel` is a sidebar down the right, 260 pixels wide, drawn with the
    sprite batch and pixel font from `rts-platform` first; the scene then fills the rest of the screen over it
    (`Renderer::set_area`: a viewport, and the colour is loaded rather than cleared). Top to bottom: a minimap (the
@@ -80,7 +86,9 @@ cargo run --release -p render3d --bin play3d -- --seed 1 --players 2
 
 You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) against computer players. Left-click
 a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
-to attack it or the ground to move there, with Ctrl held to attack-move. A computer helper (an ordinary `ai3d`
+to attack it or the ground to move there, with Ctrl held to attack-move. Double-click a unit to select all of its
+kind on screen. With a factory selected, right-click the ground to set its rally point. Ctrl and a number keep the
+selection as a control group; the number brings it back, and a second press looks at it. A computer helper (an ordinary `ai3d`
 player) runs your base and factories and sends waves with the fighters you leave to it; once you give a unit an
 order it is yours alone, and the helper's orders for it are dropped, an idea we take from Supreme Commander's and
 Total Annihilation's automation of the chores. The panel on the right (rule 8) builds and produces; its switch
@@ -104,11 +112,14 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 `wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
 Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
-Escape stops it, the helper's switch turns it off, M mutes, and the wheel zooms.
+Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, and the
+wheel zooms. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
+store; that is still open.
 
 ## Later
 
-- Double-click to select every unit of a kind on screen; control groups; rally points for factories.
+- Control groups that a browser's own Ctrl+number shortcuts don't swallow; a rally point with several legs, or
+  one that attack-moves.
 - Icons when zoomed far out; the detailed models close in.
 - Models for other settings, read from a setting pack instead of built into the program.
 - Sounds and effects from a setting pack instead of made in code; music.

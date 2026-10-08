@@ -75,6 +75,9 @@ pub enum Command {
     /// A standing rule for a unit: when damage takes its health below `percent` of its maximum, it drops what
     /// it is doing and moves to the point. A percent of 0 drops the rule.
     FallBack { unit: u32, percent: i32, x: i32, y: i32 },
+    /// A standing rule for a factory: every unit it finishes moves to the point, given in sub-cell units. `None`
+    /// drops the rule. Ignored unless the unit is a factory of mobile units.
+    Rally { unit: u32, point: Option<(i32, i32)> },
 }
 
 /// Why a move ended.
@@ -201,6 +204,8 @@ pub struct Unit {
     pub keep: Vec<(usize, u32)>,
     /// Where to fall back to, and below what percent of its health.
     pub fall_back: Option<(i32, i32, i32)>,
+    /// A factory's rally point, where every unit it finishes heads.
+    pub rally: Option<(i32, i32)>,
 }
 
 impl Canon for Unit {
@@ -211,6 +216,7 @@ impl Canon for Unit {
         let patrol = self.patrol.map(|(x, y)| vec![x, y]);
         let keep: Vec<Vec<i64>> = self.keep.iter().map(|&(k, n)| vec![k as i64, i64::from(n)]).collect();
         let fall_back = self.fall_back.map(|(p, x, y)| vec![p, x, y]);
+        let rally = self.rally.map(|(x, y)| vec![x, y]);
         w.object()
             .opt("assist", self.assist.as_ref())
             .opt("build", self.build.as_ref())
@@ -228,6 +234,7 @@ impl Canon for Unit {
             .opt("plan", plan.as_ref())
             .field("pos", &self.pos)
             .opt("queue", (!self.queue.is_empty()).then_some(&self.queue))
+            .opt("rally", rally.as_ref())
             .opt("reclaim", self.reclaim.as_ref())
             .opt("rest", rest.as_ref())
             .opt("target", self.target.as_ref())
@@ -416,6 +423,7 @@ impl World {
             patrol: None,
             keep: Vec::new(),
             fall_back: None,
+            rally: None,
         });
         id
     }
@@ -986,7 +994,12 @@ impl World {
             let f = &self.units[i];
             let gap = self.half_extent(f.kind, 1) + self.types[kind].movement.radius + CONTACT;
             let (by, owner, x, y) = (f.id, f.owner, f.pos.x, f.pos.y + gap);
+            let rally = f.rally;
             let unit = self.spawn_for(owner, kind, x, y);
+            if let Some((rx, ry)) = rally {
+                let last = self.units.len() - 1;
+                self.set_goal(last, rx, ry);
+            }
             events.push(Event::Built { by, unit });
         }
     }
@@ -1094,6 +1107,7 @@ impl World {
             }
             Command::Patrol { unit, x, y } => self.order_patrol(unit, x, y),
             Command::Keep { unit, kind, count } => self.order_keep(unit, kind, count),
+            Command::Rally { unit, point } => self.order_rally(unit, point),
             Command::FallBack { unit, percent, x, y } => {
                 if let Some(i) = self.index_of(unit) {
                     self.units[i].fall_back = (percent > 0).then_some((percent, x, y));

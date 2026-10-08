@@ -7,6 +7,7 @@
 //! - Patrol: attack-move to a point, then back to where the order was given, and so on.
 //! - Keep: a factory with an empty queue builds whatever its owner has fewer of than it wants.
 //! - Fall back: a unit hurt below a share of its health leaves the fight for a point.
+//! - Rally: every unit a factory finishes heads for a point.
 
 use super::{Job, MoveEnd, World};
 
@@ -34,6 +35,15 @@ impl World {
         if count > 0 {
             keep.push((kind, count));
         }
+    }
+
+    pub(super) fn order_rally(&mut self, unit: u32, point: Option<(i32, i32)>) {
+        let Some(i) = self.index_of(unit) else { return };
+        let types = &self.types;
+        if !types[self.units[i].kind].production.builds.iter().any(|&k| types[k].structure.is_none()) {
+            return;
+        }
+        self.units[i].rally = point.map(|(x, y)| self.onto_map(x, y));
     }
 
     /// Units on patrol that have just arrived head for the other end, still fighting on the way.

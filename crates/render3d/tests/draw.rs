@@ -250,3 +250,33 @@ fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) {
     chunk(&mut out, b"IEND", &[]);
     std::fs::write(path, out).expect("the test image is written");
 }
+
+#[test]
+fn a_selected_factory_shows_its_rally_flag() {
+    use render3d::control::{Control, RALLY};
+    let gpu = Gpu::headless().expect("a GPU adapter (a software one will do)");
+    let mut world = World::new(sim3d::terrain::Heightmap::flat(24, 24, 0), skirmish::types(), 1);
+    let factory = world.spawn(FACTORY, 8 * SUB, 8 * SUB);
+    world.command(Command::Rally { unit: factory, point: Some((14 * SUB, 12 * SUB)) });
+    world.step();
+    let mut control = Control::new(0);
+    control.selected.insert(factory);
+    let mut camera = Camera::new(world.map());
+    camera.zoom = 0.35;
+    camera.focus = [11.0, 10.0, 0.0];
+    camera.settle(world.map());
+    let mut shapes = Shapes::default().shapes(&world, 1.0);
+    shapes.extend(control.rings(&shapes));
+    let flags = control.rallies(&world);
+    assert_eq!(flags.len(), 2);
+    shapes.extend(flags.iter().copied());
+    let mut renderer = Renderer::new(&gpu, OFFSCREEN_FORMAT);
+    let image = renderer.draw_to_image(&gpu, (W, H), &world, &camera, &shapes, SKY);
+    write_png("../../target/render3d-rally.png", W, H, &image);
+    let f = flags[1];
+    let middle = [(f.min[0] + f.max[0]) / 2.0, (f.min[1] + f.max[1]) / 2.0, f.max[2]];
+    let at = camera.project(world.map(), middle, W as f32, H as f32).unwrap();
+    let [r, g, b] = pixel(&image, at).map(i32::from);
+    // Its top, lit, so not exactly the flag's colour, but plainly yellow: red and green well above blue.
+    assert!(r > b + 60 && g > b + 40, "the flag at {at:?} is {:?}, not like {RALLY:?}", [r, g, b]);
+}

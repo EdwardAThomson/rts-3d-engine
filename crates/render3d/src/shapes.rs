@@ -34,6 +34,8 @@ pub enum Part {
     Spot(i32, i32),
     /// Where a structure is about to be placed, by its north-west cell: drawn while placing it.
     Site(i32, i32),
+    /// A selected factory's rally point, by the factory's id.
+    Rally(u32),
 }
 
 /// An axis-aligned box from `min` to `max` in view space.
