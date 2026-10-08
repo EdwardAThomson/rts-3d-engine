@@ -36,6 +36,7 @@ use rts_core::rng::{random_int, seed_state};
 use std::collections::BTreeMap;
 
 mod construction;
+mod intent;
 
 /// An order from a player or the AI. Commands are the only input to the simulation, so the starting state, the
 /// seed and the command log replay a game exactly.
@@ -64,6 +65,16 @@ pub enum Command {
     Assist { unit: u32, target: u32 },
     /// Reclaim a wreck for resources, going next to it first.
     Reclaim { unit: u32, wreck: u32 },
+    /// Patrol between where the unit stands and a point: attack-move there, then back, and so on until another
+    /// order is given (see `intent`).
+    Patrol { unit: u32, x: i32, y: i32 },
+    /// A standing rule for a factory: whenever its queue is empty and its owner has fewer than `count` units of
+    /// type `kind`, counting those queued in any of the owner's factories, queue one more. A count of 0 drops
+    /// the rule. Ignored unless the factory can build that type.
+    Keep { unit: u32, kind: usize, count: u32 },
+    /// A standing rule for a unit: when damage takes its health below `percent` of its maximum, it drops what
+    /// it is doing and moves to the point. A percent of 0 drops the rule.
+    FallBack { unit: u32, percent: i32, x: i32, y: i32 },
 }
 
 /// Why a move ended.
@@ -184,6 +195,12 @@ pub struct Unit {
     pub plan: Option<(usize, i32, i32)>,
     /// The wreck this builder is reclaiming.
     pub reclaim: Option<u32>,
+    /// On patrol: the other end of the route, where it heads once it reaches its goal.
+    pub patrol: Option<(i32, i32)>,
+    /// A factory's standing targets: unit types and how many of each its owner wants.
+    pub keep: Vec<(usize, u32)>,
+    /// Where to fall back to, and below what percent of its health.
+    pub fall_back: Option<(i32, i32, i32)>,
 }
 
 impl Canon for Unit {
@@ -191,17 +208,23 @@ impl Canon for Unit {
         let goal = self.goal.map(|(x, y)| vec![x, y]);
         let rest = self.rest.map(|(x, y)| vec![x, y]);
         let plan = self.plan.map(|(k, x, y)| vec![k as i32, x, y]);
+        let patrol = self.patrol.map(|(x, y)| vec![x, y]);
+        let keep: Vec<Vec<i64>> = self.keep.iter().map(|&(k, n)| vec![k as i64, i64::from(n)]).collect();
+        let fall_back = self.fall_back.map(|(p, x, y)| vec![p, x, y]);
         w.object()
             .opt("assist", self.assist.as_ref())
             .opt("build", self.build.as_ref())
             .field("chase", &self.chase)
             .field("cooldown", &self.cooldown)
+            .opt("fallBack", fall_back.as_ref())
             .opt("goal", goal.as_ref())
             .field("health", &self.health)
             .opt("hunt", self.hunt.then_some(&true))
             .field("id", &self.id)
+            .opt("keep", (!keep.is_empty()).then_some(&keep))
             .field("kind", &(self.kind as u32))
             .field("owner", &self.owner)
+            .opt("patrol", patrol.as_ref())
             .opt("plan", plan.as_ref())
             .field("pos", &self.pos)
             .opt("queue", (!self.queue.is_empty()).then_some(&self.queue))
@@ -390,6 +413,9 @@ impl World {
             assist: None,
             plan: None,
             reclaim: None,
+            patrol: None,
+            keep: Vec::new(),
+            fall_back: None,
         });
         id
     }
@@ -409,7 +435,8 @@ impl World {
         let mut damage = Vec::new();
         self.fire(&mut events);
         self.fly(&mut events, &mut damage);
-        self.hurt(&mut events, damage);
+        let hurt = self.hurt(&mut events, damage);
+        self.fall_back(hurt);
         let mut ended = Vec::new();
         for (i, unit) in self.units.iter_mut().enumerate() {
             if let Some(goal) = unit.goal {
@@ -425,6 +452,7 @@ impl World {
                     if reason == MoveEnd::Unreachable {
                         // A builder that cannot get to its site gives up on it.
                         (unit.plan, unit.assist, unit.reclaim) = (None, None, None);
+                        unit.patrol = None;
                     }
                     ended.push((i, reason));
                 }
@@ -432,6 +460,7 @@ impl World {
         }
         self.separate();
         self.arrive_by_contact(&mut ended);
+        self.turn_patrols(&ended);
         events.extend(ended.into_iter().map(|(i, reason)| {
             let u = &self.units[i];
             Event::MoveEnded { unit: u.id, reason, x: u.pos.x, y: u.pos.y }
@@ -672,15 +701,18 @@ impl World {
         }
     }
 
-    /// Apply damage in the order it was dealt, then remove the destroyed in id order.
-    fn hurt(&mut self, events: &mut Vec<Event>, damage: Vec<Hurt>) {
+    /// Apply damage in the order it was dealt, then remove the destroyed in id order. Returns the survivors
+    /// that were hurt, in id order, with their health before this tick's damage.
+    fn hurt(&mut self, events: &mut Vec<Event>, damage: Vec<Hurt>) -> Vec<(u32, i32)> {
         let mut killer = BTreeMap::new();
+        let mut before: BTreeMap<u32, i32> = BTreeMap::new();
         for h in damage {
             let Some(i) = self.index_of(h.unit) else { continue };
             let u = &mut self.units[i];
             if u.health <= 0 || h.amount == 0 {
                 continue;
             }
+            before.entry(u.id).or_insert(u.health);
             u.health -= h.amount;
             events.push(Event::Damaged { unit: u.id, by: h.by, damage: h.amount, health: u.health });
             if u.health <= 0 {
@@ -706,6 +738,7 @@ impl World {
         if fell {
             self.reblock();
         }
+        before.into_iter().filter(|(id, _)| !killer.contains_key(id)).collect()
     }
 
     /// The indices of units by the cell they stand in, each list in id order.
@@ -846,6 +879,7 @@ impl World {
     /// of what was asked that the store can pay, over all resources. Spenders are then paid in id order, each
     /// never taking more than is left. Finished units appear beside their factory; finished frames become whole.
     fn economy(&mut self, events: &mut Vec<Event>) {
+        self.keep_stocked();
         for u in self.units.iter().filter(|u| u.build.is_none()) {
             let p = &self.types[u.kind].production;
             let Ok(s) = self.stores.binary_search_by_key(&u.owner, |s| s.owner) else { continue };
@@ -1020,14 +1054,14 @@ impl World {
                 let Some(i) = self.index_of(unit) else { return };
                 let u = &mut self.units[i];
                 (u.target, u.chase, u.hunt, u.plan, u.assist) = (None, false, false, None, None);
-                u.reclaim = None;
+                (u.reclaim, u.patrol) = (None, None);
                 self.set_goal(i, x, y);
             }
             Command::AttackMove { unit, x, y } => {
                 let Some(i) = self.index_of(unit) else { return };
                 let u = &mut self.units[i];
                 (u.target, u.chase, u.hunt, u.plan, u.assist) = (None, false, true, None, None);
-                u.reclaim = None;
+                (u.reclaim, u.patrol) = (None, None);
                 self.set_goal(i, x, y);
             }
             Command::Stop { unit } => {
@@ -1035,7 +1069,7 @@ impl World {
                     let u = &mut self.units[i];
                     (u.goal, u.rest, u.target, u.chase, u.hunt) = (None, None, None, false, false);
                     (u.plan, u.assist) = (None, None);
-                    u.reclaim = None;
+                    (u.reclaim, u.patrol) = (None, None);
                 }
             }
             Command::Produce { unit, kind, repeat } => {
@@ -1054,6 +1088,13 @@ impl World {
                     (self.units[i].queue, self.units[i].work) = (Vec::new(), 0);
                 }
             }
+            Command::Patrol { unit, x, y } => self.order_patrol(unit, x, y),
+            Command::Keep { unit, kind, count } => self.order_keep(unit, kind, count),
+            Command::FallBack { unit, percent, x, y } => {
+                if let Some(i) = self.index_of(unit) {
+                    self.units[i].fall_back = (percent > 0).then_some((percent, x, y));
+                }
+            }
             Command::Attack { unit, target } => {
                 if let Some(i) = self.index_of(unit)
                     && unit != target
@@ -1061,7 +1102,7 @@ impl World {
                 {
                     let u = &mut self.units[i];
                     (u.target, u.chase, u.hunt, u.plan, u.assist) = (Some(target), true, false, None, None);
-                    u.reclaim = None;
+                    (u.reclaim, u.patrol) = (None, None);
                 }
             }
         }

@@ -34,6 +34,7 @@ units per side; measurements decide whether we go further.
 | `sim3d` | Construction in `world/construction.rs`: builders place frames beside a site once it is clear and build them through the economy, other builders assist, and structures' footprints block ground movement (not aircraft) until destroyed. | Started |
 | `sim3d` | Resource spots on the map that finished extractors yield, and wrecks that destroyed units leave and builders reclaim for their worth. | Started |
 | `ai3d` | The computer opponent (docs/ai.md): reads `&World`, gives orders only through `World::command`, and finds builders, factories, income and fighters from the unit data. Builders keep every resource coming in and add factories; factories build builders then fighters; fighters gather, defend and attack in growing waves. Also a generic skirmish (`ai3d::skirmish`) and the headless `selfplay` runner for balance runs. | Started |
+| `sim3d` | Intent orders in `world/intent.rs` (docs/intent.md): patrols that fight on the way and turn round, factories that keep a count of each unit type their owner wants, and units that fall back to a point when badly hurt. All are state, so they hash and replay like any order. | Started |
 | later: economy | Assisting factories, reclaiming frames, build priorities, rally points, upkeep. | Planned |
 | later: renderer | wgpu, native and WebGPU, reading only `events` and snapshots, with strategic zoom from day one, on the platform layer shared with the Classic engine. | Planned |
 
@@ -45,7 +46,7 @@ Agreed with Ed on 7 Oct 2026; the order can change as we learn.
 2. Economy and building: flow economy, factories, builders, structures, resource spots and wrecks (done for a
    first game; polish later).
 3. A simple AI and headless self-play runs for balance numbers (first version built: `ai3d`, docs/ai.md).
-4. Intent orders: factory targets, fall-back rules, patrols that react.
+4. Intent orders: factory targets, fall-back rules, patrols that react (first version built: docs/intent.md).
 5. Renderer: wgpu with strategic zoom, on the platform layer shared with the Classic engine (window, input, GPU
    setup, textures, text, audio), which starts in `rts-engine` and moves to its own crate when this engine needs
    it.
