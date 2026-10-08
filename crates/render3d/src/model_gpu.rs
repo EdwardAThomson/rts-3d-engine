@@ -212,8 +212,12 @@ impl ModelDrawer {
         for s in shapes {
             let (Some(pose), Some(at)) = (s.unit, self.set.placement(s)) else { continue };
             let Some(Some(model)) = self.set.by_kind.get(pose.kind) else { continue };
-            // A frame is drawn pale; the alpha says how pale.
-            let pale = if matches!(s.part, Part::Frame(_)) { 255 } else { 0 };
+            // The alpha says how the model is finished: pale for a frame, burnt for a wreck.
+            let pale = match s.part {
+                Part::Frame(_) => 255,
+                Part::Wreck(_) => 128,
+                _ => 0,
+            };
             for (i, piece) in model.pieces.iter().enumerate() {
                 let mut bytes = [0; INSTANCE as usize];
                 let m = piece_matrix(&at, &pose, piece);

@@ -3,6 +3,10 @@
 //! it is finished. Builders next to a frame of their own side add their build power to it, paid for through the
 //! economy like a factory's work. Structures never move, and their footprints block ground movement, so flow
 //! fields and pushes go round them. Total Annihilation's nanolathe-and-frame idea, our own code.
+//!
+//! A destroyed structure's wreck keeps blocking its footprint until it is reclaimed, the way a ruined building's
+//! rubble does in Total Annihilation, so ground units go round it and nothing is built there. A mobile unit's wreck
+//! is low enough to drive over and blocks nothing.
 
 use super::{Event, SUB, World, centre};
 
@@ -10,12 +14,13 @@ use super::{Event, SUB, World, centre};
 const BUILD_REACH: i32 = SUB;
 
 impl World {
-    /// Rebuild the blocked cells from the structures standing now, and every flow field with them.
+    /// Rebuild the blocked cells from the structures standing now and their wrecks, and every flow field with them.
     pub(super) fn reblock(&mut self) {
         let (w, h) = (self.map.width(), self.map.height());
         let mut blocked = vec![false; (w * h) as usize];
-        for u in &self.units {
-            if let Some((x0, y0, x1, y1)) = self.footprint_cells(u.kind, u.pos.x, u.pos.y) {
+        let bodies = self.units.iter().map(|u| (u.kind, u.pos)).chain(self.wrecks.iter().map(|w| (w.kind, w.pos)));
+        for (kind, pos) in bodies {
+            if let Some((x0, y0, x1, y1)) = self.footprint_cells(kind, pos.x, pos.y) {
                 for cy in y0.max(0)..y1.min(h) {
                     for cx in x0.max(0)..x1.min(w) {
                         blocked[(cy * w + cx) as usize] = true;
@@ -53,17 +58,22 @@ impl World {
     /// The ground distance from `(x, y)` to a unit's body: its footprint for a structure, its disc otherwise. 0
     /// means the point is on or inside it.
     pub(super) fn gap(&self, u: &super::Unit, x: i32, y: i32) -> i64 {
-        let (dx, dy) = (i64::from((x - u.pos.x).abs()), i64::from((y - u.pos.y).abs()));
-        if self.types[u.kind].structure.is_some() {
-            let (hx, hy) = (i64::from(self.half_extent(u.kind, 0)), i64::from(self.half_extent(u.kind, 1)));
+        self.gap_to(u.kind, u.pos, x, y)
+    }
+
+    /// The same for the body a unit of type `kind` standing at `pos` has, or had: a wreck covers the same ground.
+    fn gap_to(&self, kind: usize, pos: super::Vec3, x: i32, y: i32) -> i64 {
+        let (dx, dy) = (i64::from((x - pos.x).abs()), i64::from((y - pos.y).abs()));
+        if self.types[kind].structure.is_some() {
+            let (hx, hy) = (i64::from(self.half_extent(kind, 0)), i64::from(self.half_extent(kind, 1)));
             let (ox, oy) = ((dx - hx).max(0), (dy - hy).max(0));
             return i64::from(rts_core::imath::isqrt((ox * ox + oy * oy) as u64) as i32);
         }
         let d = i64::from(rts_core::imath::isqrt((dx * dx + dy * dy) as u64) as i32);
-        (d - i64::from(self.types[u.kind].movement.radius)).max(0)
+        (d - i64::from(self.types[kind].movement.radius)).max(0)
     }
 
-    /// Whether cell `(cx, cy)` is under a structure's footprint (cells off the map are not).
+    /// Whether cell `(cx, cy)` is under a structure's footprint or its wreck (cells off the map are not).
     pub fn is_blocked(&self, cx: i32, cy: i32) -> bool {
         let (w, h) = (self.map.width(), self.map.height());
         (0..w).contains(&cx)
@@ -182,7 +192,12 @@ impl World {
     pub(super) fn near_wreck(&self, i: usize, w: usize) -> bool {
         let (me, wreck) = (&self.units[i], &self.wrecks[w]);
         let reach = i64::from(self.types[me.kind].movement.radius + BUILD_REACH);
-        i64::from(me.pos.ground_distance(wreck.pos)) <= reach
+        // A structure's wreck is reached from beside its footprint; a unit's from its middle.
+        let gap = match self.types[wreck.kind].structure {
+            Some(_) => self.gap_to(wreck.kind, wreck.pos, me.pos.x, me.pos.y),
+            None => i64::from(me.pos.ground_distance(wreck.pos)),
+        };
+        gap <= reach
     }
 
     /// Every builder, in id order, works towards its plan or the frame it assists: it goes next to the site,
@@ -197,8 +212,12 @@ impl World {
                     Some(w) if self.near_wreck(i, w) => self.units[i].goal = None,
                     Some(w) => {
                         if self.units[i].goal.is_none() {
-                            let p = self.wrecks[w].pos;
-                            self.set_goal(i, p.x, p.y);
+                            let (me, p, kind) = (&self.units[i], self.wrecks[w].pos, self.wrecks[w].kind);
+                            let (x, y) = match self.footprint_cells(kind, p.x, p.y) {
+                                Some(cells) => self.beside(cells, me.pos.x, me.pos.y).unwrap_or((p.x, p.y)),
+                                None => (p.x, p.y),
+                            };
+                            self.set_goal(i, x, y);
                         }
                     }
                 }

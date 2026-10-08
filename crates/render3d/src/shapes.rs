@@ -55,7 +55,7 @@ pub struct Pose {
     pub yaw: f32,
     /// Which way its turret faces, in the same terms.
     pub aim: f32,
-    /// How far a frame is built, from 0 to 1; 1 for a finished unit.
+    /// How far a frame is built, from 0 to 1; 1 for a finished unit. A wreck is drawn squashed to `WRECK_SHARE`.
     pub grown: f32,
 }
 
@@ -71,6 +71,10 @@ const SHOT: f32 = 0.12;
 /// Projectiles' colour.
 const SHOT_COLOUR: [u8; 4] = [255, 230, 150, 255];
 const WRECK_COLOUR: [u8; 4] = [70, 66, 60, 255];
+/// How tall a structure's wreck is, as a share of the structure.
+pub const WRECK_SHARE: f32 = 0.35;
+/// How tall a mobile unit's wreck is, in cells: low enough to drive over.
+pub const HEAP: f32 = 0.08;
 const SPOT_COLOUR: [u8; 4] = [210, 170, 60, 255];
 
 /// Turns a world into shapes, remembering where things were at the last tick so it can draw them in between.
@@ -109,11 +113,30 @@ impl Shapes {
             let part = Part::Spot(spot.cx, spot.cy);
             out.push(Shape::plain(part, [x - 0.4, y - 0.4, z], [x + 0.4, y + 0.4, z + 0.03], SPOT_COLOUR));
         }
+        // Wrecks: a structure's covers the footprint it blocks, a mobile unit's is a low heap that others drive over.
+        // Each lies at its own angle, which only looks matter, so it comes from the wreck's id.
+        let mut heaps = Vec::new();
         for w in world.wrecks() {
-            let r = world.types()[w.kind].movement.radius as f32 / SUB as f32;
+            let t = &world.types()[w.kind];
             let p = to_view(w.pos);
-            let max = [p[0] + r, p[1] + r, p[2] + 0.1];
-            out.push(Shape::plain(Part::Wreck(w.id), [p[0] - r, p[1] - r, p[2]], max, WRECK_COLOUR));
+            let (min, max, structure) = match t.structure {
+                Some(s) => {
+                    let (x0, y0) = (
+                        (w.pos.x - s.width * SUB / 2).div_euclid(SUB) as f32,
+                        (w.pos.y - s.depth * SUB / 2).div_euclid(SUB) as f32,
+                    );
+                    let tall = t.height as f32 / HEIGHT_PER_CELL * WRECK_SHARE;
+                    ([x0, y0, p[2]], [x0 + s.width as f32, y0 + s.depth as f32, p[2] + tall], true)
+                }
+                None => {
+                    let r = t.movement.radius as f32 / SUB as f32;
+                    heaps.push((p, r));
+                    ([p[0] - r, p[1] - r, p[2]], [p[0] + r, p[1] + r, p[2] + HEAP], false)
+                }
+            };
+            let yaw = if structure { 0.0 } else { (w.id as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU) };
+            let pose = Pose { kind: w.kind, structure, yaw, aim: yaw + 0.6, grown: WRECK_SHARE };
+            out.push(Shape { part: Part::Wreck(w.id), min, max, colour: WRECK_COLOUR, unit: Some(pose) });
         }
         for u in world.units() {
             let t = &world.types()[u.kind];
@@ -139,7 +162,10 @@ impl Shapes {
                 out.push(Shape { part, min, max, colour, unit: Some(unit) });
             } else {
                 let now = to_view(u.pos);
-                let p = self.before.get(&u.id).map_or(now, |&b| between(to_view(b), now, alpha));
+                let mut p = self.before.get(&u.id).map_or(now, |&b| between(to_view(b), now, alpha));
+                if t.movement.altitude == 0 {
+                    p[2] += over_heaps(&heaps, p, t.movement.radius as f32 / SUB as f32);
+                }
                 let half = t.movement.radius as f32 / SUB as f32;
                 let min = [p[0] - half, p[1] - half, p[2]];
                 // A unit that has never moved faces the middle of the map, as it would set out.
@@ -169,6 +195,18 @@ impl Shapes {
     fn aim(&self, world: &World, u: &sim3d::world::Unit, yaw: f32) -> f32 {
         u.target.and_then(|t| world.unit(t)).and_then(|t| heading(u.pos, t.pos)).unwrap_or(yaw)
     }
+}
+
+/// How far a ground unit of radius `r` at `p` rides up over the wreck heaps under it: the full height of a heap
+/// once its middle is over the heap's middle, rising from nothing as their edges first touch.
+fn over_heaps(heaps: &[(V3, f32)], p: V3, r: f32) -> f32 {
+    heaps
+        .iter()
+        .map(|&(h, hr)| {
+            let d = ((p[0] - h[0]).powi(2) + (p[1] - h[1]).powi(2)).sqrt();
+            HEAP * (1.0 - d / (r + hr)).clamp(0.0, 0.5) * 2.0
+        })
+        .fold(0.0, f32::max)
 }
 
 fn between(a: V3, b: V3, alpha: f32) -> V3 {

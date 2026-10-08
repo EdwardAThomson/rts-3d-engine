@@ -17,7 +17,9 @@ self-play runs to tune.
    is a builder; a structure that builds mobile units is a factory; a structure that makes a resource, or an
    extractor while the map has spots, is income; a mobile unit with a weapon is a fighter. Resources are counted,
    never assumed.
-4. **Base.** Each think, every idle builder takes the first that applies: start a new structure while fewer than
+4. **Base.** Each think, every idle builder takes the first that applies: reclaim a structure's wreck lying on a
+   resource spot on its side of the map (it blocks the spot until it is gone), unless another builder is on it;
+   start a new structure while fewer than
    `projects` are under way (income for any resource with none, then a first factory, then income for the
    scarcest resource that is short or for the scarcest of all while spending stalls, then an extractor on any
    free spot on its side of the map, then another factory while every resource is plentiful); help finish the

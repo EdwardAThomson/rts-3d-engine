@@ -1,11 +1,13 @@
 //! The base: what idle builders do. Each think, every idle builder takes the first of these that applies:
 //!
-//! 1. start a new structure, while fewer than `projects` are under way: income for any resource that has none
+//! 1. reclaim a structure's wreck lying on a resource spot on its side of the map, which blocks the spot until
+//!    it is gone, nearest home first, unless another of its builders is already on it;
+//! 2. start a new structure, while fewer than `projects` are under way: income for any resource that has none
 //!    yet, then a first factory, then income for the scarcest resource that is short (or for the scarcest of all
 //!    while the player's spending is stalled), then an extractor on any free spot on its side of the map, then
 //!    another factory while every resource is plentiful;
-//! 2. help finish the nearest frame of its own side;
-//! 3. reclaim the nearest wreck within `reclaim_radius` of home.
+//! 3. help finish the nearest frame of its own side;
+//! 4. reclaim the nearest wreck within `reclaim_radius` of home.
 //!
 //! Income for a resource is an extractor on a free spot of it on its own side of the map if there is one,
 //! otherwise the generator that makes most of it. Other structures go on the first good site in rings round home,
@@ -39,7 +41,13 @@ pub(crate) fn think(ai: &mut Ai, world: &World, out: &mut Vec<Command>) {
 
     clear_sites(ai, world, &mine, out);
 
+    let mut taken: Vec<u32> = mine.iter().filter_map(|u| u.reclaim).collect();
     for b in mine.iter().filter(|u| u.build.is_none() && is_builder(types, &types[u.kind]) && idle(u)) {
+        if let Some(w) = spot_wreck(ai, world, &taken) {
+            out.push(Command::Reclaim { unit: b.id, wreck: w });
+            taken.push(w);
+            continue;
+        }
         if projects.len() < ai.settings.projects {
             let site = want(ai, world, b, &done, &projects).and_then(|w| site_for(ai, world, b, w, &plans));
             if let Some((kind, cx, cy)) = site {
@@ -187,6 +195,26 @@ fn spot_site(ai: &Ai, world: &World, b: &Unit, r: usize, plans: &[Site]) -> Opti
     None
 }
 
+/// A structure's wreck covering a resource spot on this player's side of the map (as `spot_site` reckons sides),
+/// nearest home, that none of its builders is reclaiming yet.
+fn spot_wreck(ai: &Ai, world: &World, taken: &[u32]) -> Option<u32> {
+    let types = world.types();
+    let home = ai.home();
+    let enemy: Vec<(i32, i32)> = (world.units().iter())
+        .filter(|u| u.owner != ai.player && is_structure(&types[u.kind]) && !types[u.kind].production.extracts)
+        .map(pos)
+        .collect();
+    let ours = |at: (i32, i32)| enemy.iter().all(|&e| dist2(home, at) <= dist2(e, at));
+    (world.wrecks().iter())
+        .filter(|w| !taken.contains(&w.id) && types[w.kind].structure.is_some())
+        .filter(|w| {
+            let site = site_of_body(world, w.kind, (w.pos.x, w.pos.y));
+            world.spots().iter().any(|p| inside(site, world, (p.cx, p.cy)) && ours(centre((p.cx, p.cy))))
+        })
+        .min_by_key(|w| (dist2(home, (w.pos.x, w.pos.y)), w.id))
+        .map(|w| w.id)
+}
+
 /// The first good site in rings round home, measured from home to the site's centre. Within a ring, sites
 /// furthest from the rally point come first, so the base grows away from the enemy; equally far sites are taken
 /// by which side of the line to the rally point they are on. Every key is measured from the base, so a base in
@@ -267,8 +295,13 @@ fn covers_spot(world: &World, site: Site) -> bool {
 
 /// The site a structure or frame stands on.
 fn site_of(world: &World, u: &Unit) -> Site {
-    let (w, d) = world.types()[u.kind].structure.map_or((1, 1), |s| (s.width, s.depth));
-    (u.kind, (u.pos.x - w * SUB / 2).div_euclid(SUB), (u.pos.y - d * SUB / 2).div_euclid(SUB))
+    site_of_body(world, u.kind, pos(u))
+}
+
+/// The site a structure of type `kind` centred at `(x, y)` stands on, or its wreck lies on.
+fn site_of_body(world: &World, kind: usize, (x, y): (i32, i32)) -> Site {
+    let (w, d) = world.types()[kind].structure.map_or((1, 1), |s| (s.width, s.depth));
+    (kind, (x - w * SUB / 2).div_euclid(SUB), (y - d * SUB / 2).div_euclid(SUB))
 }
 
 fn centre((cx, cy): (i32, i32)) -> (i32, i32) {

@@ -1014,8 +1014,12 @@ impl World {
             }
             self.wrecks[w].work = to;
             if to == time {
-                self.wrecks.remove(w);
+                let gone = self.wrecks.remove(w);
                 events.push(Event::Reclaimed { by: self.units[i].id, wreck: id });
+                // The ground under a structure's wreck opens again.
+                if self.types[gone.kind].structure.is_some() {
+                    self.reblock();
+                }
             }
         }
     }

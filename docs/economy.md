@@ -43,7 +43,11 @@ empty, everything that spends slows down together and the game says so. Nothing 
 9. **Wrecks.** A finished unit whose type has a wreck worth leaves a wreck when destroyed; a frame leaves
    nothing. A builder next to a wreck reclaims it with its build power, gaining its worth the way building pays
    (exact in total), over half the type's build time. The wreck is gone once all of it is reclaimed. Income from
-   reclaiming is capped by the store like any other. Later: reclaiming frames, wrecks that block or burn out.
+   reclaiming is capped by the store like any other. A structure's wreck keeps blocking the footprint it stood on
+   until it is reclaimed, so ground units go round it and nothing is built there (Total Annihilation's rubble, our
+   own code); a builder reclaims it from beside the footprint. A mobile unit's wreck is a low heap that blocks
+   nothing: units drive over it, and the renderer lifts them over it. Ed asked for this on 8 Oct 2026, after seeing
+   units drive through rubble. Later: reclaiming frames, wrecks that burn out.
 
 ## Order of work
 

@@ -216,3 +216,51 @@ fn mipmaps_halve_down_to_one_pixel_and_average() {
     // The first pixel of level 1 averages pixels 0, 1, 4 and 5.
     assert_eq!(levels[1].rgba[..4], [(16 + 64 + 80 + 2) / 4, 0, ((255 + 239 + 191 + 175 + 2) / 4) as u8, 255]);
 }
+
+#[test]
+fn wrecks_lie_where_they_block_and_vehicles_ride_over_heaps() {
+    use render3d::shapes::{HEAP, WRECK_SHARE};
+    let models = Models::skirmish();
+    let mut world = World::new(Heightmap::flat(24, 24, 0), skirmish::types(), 1);
+    let generator = world.spawn_for(1, GENERATOR, 10 * SUB, 10 * SUB);
+    let enemy_tank = world.spawn_for(1, TANK, 15 * SUB, 14 * SUB);
+    let tanks = [9, 10, 11].map(|x| world.spawn_for(0, TANK, x * SUB, 14 * SUB));
+    for t in tanks {
+        world.command(Command::Attack { unit: t, target: generator });
+    }
+    let mut shapes = Shapes::default();
+    for _ in 0..2000 {
+        shapes.remember(&world);
+        world.step();
+        if world.unit(generator).is_none() && world.unit(enemy_tank).is_none() {
+            break;
+        }
+    }
+    assert!(world.wrecks().iter().any(|w| w.kind == GENERATOR) && world.wrecks().iter().any(|w| w.kind == TANK));
+    let tank = *tanks.iter().find(|&&t| world.unit(t).is_some()).expect("a tank of ours is left");
+    let all = shapes.shapes(&world, 1.0);
+    let wrecks: Vec<_> = all.iter().filter(|s| matches!(s.part, Part::Wreck(_))).collect();
+    // The generator's wreck covers the 2 by 2 cells it blocks, drawn as its model, burnt and low.
+    let rubble = wrecks.iter().find(|s| s.unit.is_some_and(|u| u.structure)).unwrap();
+    assert_eq!((rubble.min[0], rubble.min[1], rubble.max[0], rubble.max[1]), (9.0, 9.0, 11.0, 11.0));
+    assert!((9..11).all(|c| world.is_blocked(c, 9) && world.is_blocked(c, 10)));
+    let at = models.placement(rubble).unwrap();
+    assert!((at.up / at.across - WRECK_SHARE).abs() < 1e-6, "squashed");
+
+    // The tank's wreck is a low heap; the tank drives onto it and rides up over it.
+    let heap = wrecks.iter().find(|s| s.unit.is_some_and(|u| !u.structure)).unwrap();
+    assert!((heap.max[2] - heap.min[2] - HEAP).abs() < 1e-6);
+    let w = world.wrecks().iter().find(|w| w.kind == TANK && w.pos.x > 12 * SUB).expect("the enemy tank's").pos;
+    let ground = |s: &Shapes, world: &World| {
+        s.shapes(world, 1.0).into_iter().find(|s| s.part == Part::Unit(tank)).unwrap().min[2]
+    };
+    assert_eq!(ground(&shapes, &world), 0.0, "on the ground away from it");
+    world.command(Command::Move { unit: tank, x: w.x, y: w.y });
+    for _ in 0..600 {
+        shapes.remember(&world);
+        world.step();
+    }
+    let p = world.unit(tank).unwrap().pos;
+    assert_eq!((p.x, p.y), (w.x, w.y), "the heap blocks nothing");
+    assert!((ground(&shapes, &world) - HEAP).abs() < 1e-6, "and the tank sits on top of it");
+}

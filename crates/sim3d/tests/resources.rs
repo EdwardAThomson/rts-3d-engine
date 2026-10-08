@@ -179,3 +179,67 @@ fn a_replay_with_spots_and_wrecks_matches() {
         assert_eq!(hash_of(&replay.seek(tick)).value(), hashes[tick as usize - 1], "tick {tick}");
     }
 }
+
+/// Destroys the unit `target` with a gunner of player 0 placed at `from`, and returns its wreck.
+fn wreck_of(world: &mut World, target: u32, from: (i32, i32)) -> u32 {
+    let gunner = world.spawn_for(0, GUNNER, from.0, from.1);
+    world.command(Command::Attack { unit: gunner, target });
+    for _ in 0..200 {
+        for e in world.step() {
+            if let Event::Wrecked { unit, wreck } = e
+                && unit == target
+            {
+                return wreck;
+            }
+        }
+    }
+    panic!("no wreck");
+}
+
+#[test]
+fn a_structures_wreck_blocks_its_footprint_until_it_is_reclaimed() {
+    let mut world = world();
+    let extractor = world.spawn_for(1, EXTRACTOR, centre(8, 8).0, centre(8, 8).1);
+    assert!(world.is_blocked(8, 8));
+    let wreck = wreck_of(&mut world, extractor, centre(8, 2));
+    assert!(world.is_blocked(8, 8), "the wreck still blocks the cell");
+    assert!(!world.site_ok(EXTRACTOR, 8, 8), "and nothing can be built there");
+
+    // A tank driving straight across goes round it.
+    let tank = world.spawn(TANK, centre(4, 8).0, centre(4, 8).1);
+    world.command(Command::Move { unit: tank, x: centre(12, 8).0, y: centre(12, 8).1 });
+    for _ in 0..200 {
+        world.step();
+        let p = world.unit(tank).unwrap().pos;
+        assert!(!((8 * SUB..9 * SUB).contains(&p.x) && (8 * SUB..9 * SUB).contains(&p.y)), "on the wreck at {p:?}");
+    }
+    let p = world.unit(tank).unwrap().pos;
+    assert!(
+        p.ground_distance(sim3d::space::Vec3::new(centre(12, 8).0, centre(12, 8).1, 0)) < SUB as u32,
+        "and arrives"
+    );
+
+    // A builder reclaims it from beside the cell, and the ground opens again.
+    let builder = world.spawn(BUILDER, centre(2, 12).0, centre(2, 12).1);
+    world.command(Command::Reclaim { unit: builder, wreck });
+    for _ in 0..300 {
+        world.step();
+    }
+    assert!(world.wrecks().iter().all(|w| w.id != wreck), "reclaimed");
+    assert!(!world.is_blocked(8, 8) && world.site_ok(EXTRACTOR, 8, 8), "and the cell is free");
+}
+
+#[test]
+fn a_mobile_units_wreck_blocks_nothing() {
+    let mut world = world();
+    let tank = world.spawn_for(1, TANK, centre(8, 4).0, centre(8, 4).1);
+    wreck_of(&mut world, tank, centre(4, 4));
+    assert!(!world.is_blocked(8, 4));
+    let other = world.spawn(TANK, centre(8, 10).0, centre(8, 10).1);
+    world.command(Command::Move { unit: other, x: centre(8, 4).0, y: centre(8, 4).1 });
+    for _ in 0..100 {
+        world.step();
+    }
+    let p = world.unit(other).unwrap().pos;
+    assert_eq!((p.x, p.y), centre(8, 4), "it drives onto the wreck's own point");
+}

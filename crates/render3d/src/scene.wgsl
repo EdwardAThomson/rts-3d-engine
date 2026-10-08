@@ -93,7 +93,7 @@ fn fs_overlay(in: Flat) -> @location(0) vec4<f32> {
 }
 
 // Models from the art studio, each piece an instance placed by its own matrix, lit like everything else. Team paint
-// is baked grey and takes the owner's colour; a frame still being built is drawn pale.
+// is baked grey and takes the owner's colour; a frame still being built is drawn pale and a wreck burnt.
 @group(1) @binding(0) var albedo: texture_2d<f32>;
 @group(1) @binding(1) var albedo_sampler: sampler;
 
@@ -102,7 +102,7 @@ struct Model {
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) team: f32,
-    // rgb: the owner's colour; a: 1 for a frame.
+    // rgb: the owner's colour; a: 1 for a frame, a half for a wreck.
     @location(3) paint: vec4<f32>,
 };
 
@@ -133,7 +133,9 @@ fn fs_model(in: Model) -> @location(0) vec4<f32> {
     let base = textureSample(albedo, albedo_sampler, in.uv).rgb;
     // The baked grey is about half white, so twice the colour times the grey gives back the colour at full strength.
     let painted = mix(base, min(base * in.paint.rgb * 2.0, vec3<f32>(1.0)), in.team);
-    let colour = mix(painted, vec3<f32>(1.0), 0.5 * in.paint.a);
+    let frame = step(0.75, in.paint.a);
+    let wreck = step(0.25, in.paint.a) * (1.0 - frame);
+    let colour = mix(painted, vec3<f32>(1.0), 0.5 * frame) * (1.0 - 0.7 * wreck);
     let light = 0.3 + 0.7 * max(dot(normalize(in.normal), globals.sun.xyz), 0.0);
     return vec4<f32>(colour * light, 1.0);
 }
