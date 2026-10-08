@@ -30,6 +30,9 @@ pub const SIZE: i32 = 64;
 /// How far each start is from its two map edges, in cells.
 const INSET: i32 = 8;
 
+/// The most a start is nudged along each axis, in sub-cell units.
+const JITTER: i32 = SUB / 4;
+
 /// Armour classes: 0 for units, 1 for structures.
 const STRUCTURE_ARMOUR: usize = 1;
 
@@ -113,8 +116,15 @@ pub fn starts(players: u8) -> Vec<(i32, i32)> {
         .collect()
 }
 
-/// A skirmish for `players` (2 to 4): each starts with one builder and a store of 1000 of each resource.
+/// A skirmish for `players` (2 to 4): each starts with one builder and a store of 1000 of each resource. Player
+/// `p` starts in corner `p` of `starts`.
 pub fn skirmish(seed: i32, players: u8) -> World {
+    skirmish_turned(seed, players, 0)
+}
+
+/// The same skirmish with the seats turned: player `p` starts in corner `(p + turn) % players`. Playing a seed
+/// once per turn gives every player every corner, so an edge one corner has cancels out of the totals.
+pub fn skirmish_turned(seed: i32, players: u8, turn: u8) -> World {
     assert!((2..=4).contains(&players), "two to four players");
     let mut world = World::new(hills(seed), types(), seed);
     // Ore spots: three beside each corner, pointing into the map, and four round the middle.
@@ -125,8 +135,13 @@ pub fn skirmish(seed: i32, players: u8) -> World {
             world.add_spot(x, y, ORE, 300);
         }
     }
-    for (p, (x, y)) in starts(players).into_iter().enumerate() {
-        let p = p as u8;
+    // Each start is nudged a little, the same way whoever sits there, so a mirrored game is not decided by which
+    // way exact ties happen to break.
+    let mut rng = seed_state(seed.wrapping_add(1));
+    let mut nudge = || random_int(&mut rng, JITTER as u32 * 2 + 1) as i32 - JITTER;
+    let corners: Vec<(i32, i32)> = starts(players).into_iter().map(|(x, y)| (x + nudge(), y + nudge())).collect();
+    for p in 0..players {
+        let (x, y) = corners[usize::from((p + turn) % players)];
         world.set_store(p, vec![1_000_000, 1_000_000], vec![2_000_000, 2_000_000]);
         world.spawn_for(p, BUILDER, x, y);
     }

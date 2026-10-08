@@ -183,19 +183,23 @@ impl FlowField {
                 continue;
             }
             let a = cell(i);
-            let mut best: Option<(u32, usize)> = None;
+            // Among equally cheap steps, take the one whose cell is nearest the goal in a straight line, so a
+            // route and its mirror image make the same choices; any tie left goes to the neighbour order.
+            let mut best: Option<(u32, i64, usize)> = None;
             for (dx, dy) in NEIGHBOURS {
                 let b = (a.0 + dx, a.1 + dy);
                 if let Some(step) = step_cost((w, hgt), &heights, blocked, class, a, b)
                     && cost[index(b)] != u32::MAX
                 {
                     let total = step + cost[index(b)];
-                    if best.is_none_or(|(t, _)| total < t) {
-                        best = Some((total, index(b)));
+                    let (gx, gy) = (i64::from(goal.0 - b.0), i64::from(goal.1 - b.1));
+                    let line = gx * gx + gy * gy;
+                    if best.is_none_or(|(t, l, _)| (total, line) < (t, l)) {
+                        best = Some((total, line, index(b)));
                     }
                 }
             }
-            next[i] = best.map_or(-1, |(_, j)| j as i32);
+            next[i] = best.map_or(-1, |(_, _, j)| j as i32);
         }
         Self { width: w, goal, cost, next }
     }

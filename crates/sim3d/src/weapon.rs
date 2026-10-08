@@ -104,7 +104,7 @@ impl Projectile {
             return self.aim;
         }
         let (t, n) = (i64::from(t), i64::from(self.flight));
-        let along = |a: i32, b: i32| a + (i64::from(b - a) * t).div_euclid(n) as i32;
+        let along = |a: i32, b: i32| a + (i64::from(b - a) * t / n) as i32;
         let (climb, g) = (i64::from(self.climb), i64::from(self.gravity));
         let z = i64::from(self.from.z) + climb * t - g * t * (t + 1) / 2;
         Vec3::new(along(self.from.x, self.aim.x), along(self.from.y, self.aim.y), z as i32)

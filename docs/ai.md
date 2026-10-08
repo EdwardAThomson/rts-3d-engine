@@ -42,7 +42,9 @@ self-play runs to tune.
 `ai3d::skirmish` is a generic test game: a 64 by 64 map of rolling hills from a seed, mirrored so every corner
 start is the same, two to four players with one builder each, ore spots near each base, in the empty corners
 and round the middle, and six generic unit types (builder, generator, extractor, factory, tank, artillery). It
-stands in for a setting pack until the 3D engine reads packs.
+stands in for a setting pack until the 3D engine reads packs. Each start is nudged up to a quarter of a cell by
+the seed, the same way whoever sits there, so a mirrored game is not settled by which way an exact tie breaks.
+`skirmish_turned` turns the seats, so player `p` starts in corner `(p + turn) % players`.
 
 `selfplay` runs computer players on it with no window:
 
@@ -52,17 +54,32 @@ cargo run --release -p ai3d --bin selfplay -- --seeds 1..20
 cargo run --release -p ai3d --bin selfplay -- --seed 1 --idle 1    # player 1 does nothing
 ```
 
-Each game prints the winner and when, the final state hash, and what each player built and lost; a range of
-seeds adds the win counts and the mean length. Those numbers are what balance changes are judged by.
+Each seed is played once per seat arrangement, so every player gets every corner (`--turn N` plays one). Each
+game prints the winner, their corner and when, the final state hash, and what each player built and lost. The
+summary counts wins by player and by corner and gives the mean length. Wins by player are what balance changes
+are judged by; wins by corner show whether the map or the engine favours a place.
 
-## First runs
+## Fair corners
 
-Ten seeds of two opponents on the skirmish, up to 54,000 ticks each (8 Oct 2026): 7 games won, 3 with no
-winner, mean length about 26,600 ticks; the run takes about a minute on one core. The south-east corner won 6
-of the 7. With the seats swapped (seeds 1 to 8, up to 30,000 ticks) it won 6 of 8, so the bias follows the
-corner, not the player number. Likely causes to look at next: factories always release units to the south, and the
-fixed tie-break orders in flow fields and steering are not mirror images. A fair mirror matters before any
-balance number is trusted.
+The first runs (8 Oct 2026) had one corner winning almost every decisive game, whichever player sat there.
+Mirrored test games showed where it came from:
+
+- Moves and shots rounded towards negative infinity, so a unit heading north-west covered a little more ground
+  each tick than its mirror image heading south-east, and shots landed differently. They now round towards the
+  start point.
+- Flow fields broke ties between equally cheap steps by a fixed compass order, so a group heading one way went
+  diagonal first and its mirror image went straight first. Ties now go to the step whose cell is nearest the
+  goal in a straight line.
+- A unit exactly on a cell edge counted as in the cell on the far side for one direction only. It now steers from
+  whichever touching cell is cheaper to reach the goal from.
+- The opponent laid out its base from a fixed row order and an off-centre site for even sizes; it now measures
+  every site from home to the site's centre, so bases in opposite corners are mirror images.
+
+`sim3d`'s movement and combat tests now check that a move, a group move and a shot each stay exact mirror images
+of their mirror-image twins. The skirmish nudges each start by the seed and self-play turns the seats, so the
+few ties that still break one way (exact ties at a corner, the fixed exit side of factories) cannot settle a
+whole run. Thirty seeds, both seatings, up to 30,000 ticks: wins by corner 30 to 26, by player 30 to 26, 4 with
+no winner, mean length about 13,200 ticks.
 
 ## Later
 

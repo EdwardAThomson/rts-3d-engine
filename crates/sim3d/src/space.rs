@@ -19,11 +19,12 @@ impl Vec3 {
         Self { x, y, z }
     }
 
-    /// The point `num / den` of the way from `self` to `to`, rounded towards negative infinity on each axis.
-    /// Intermediate products use 64 bits, so any two points on a map are safe.
+    /// The point `num / den` of the way from `self` to `to`, rounded towards `self` on each axis, so a step one
+    /// way and the mirror-image step the other way cover the same ground. Intermediate products use 64 bits, so
+    /// any two points on a map are safe.
     pub fn lerp(self, to: Vec3, num: i32, den: i32) -> Vec3 {
         debug_assert!(den > 0 && (0..=den).contains(&num));
-        let step = |a: i32, b: i32| a + ((i64::from(b - a) * i64::from(num)).div_euclid(i64::from(den))) as i32;
+        let step = |a: i32, b: i32| a + (i64::from(b - a) * i64::from(num) / i64::from(den)) as i32;
         Vec3::new(step(self.x, to.x), step(self.y, to.y), step(self.z, to.z))
     }
 
@@ -46,12 +47,16 @@ mod tests {
     use rts_core::hash::hash_of;
 
     #[test]
-    fn lerp_hits_both_ends_and_rounds_down() {
+    fn lerp_hits_both_ends_and_rounds_towards_the_start() {
         let a = Vec3::new(0, 0, 0);
         let b = Vec3::new(10, -10, 3);
         assert_eq!(a.lerp(b, 0, 4), a);
         assert_eq!(a.lerp(b, 4, 4), b);
-        assert_eq!(a.lerp(b, 1, 4), Vec3::new(2, -3, 0));
+        assert_eq!(a.lerp(b, 1, 4), Vec3::new(2, -2, 0));
+        // A step and its mirror image cover the same ground.
+        let (c, d) = (Vec3::new(100, 100, 0), Vec3::new(-100, -100, 0));
+        let (e, f) = (Vec3::new(-100, -100, 0), Vec3::new(100, 100, 0));
+        assert_eq!(c.lerp(d, 3, 7).x - c.x, -(e.lerp(f, 3, 7).x - e.x));
     }
 
     #[test]

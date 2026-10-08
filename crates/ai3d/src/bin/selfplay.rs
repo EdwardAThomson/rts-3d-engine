@@ -6,9 +6,13 @@
 //! cargo run --release -p ai3d --bin selfplay -- --seeds 1..20 --players 2
 //! ```
 //!
+//! Each seed is played once per seat arrangement, so every player has every corner and an edge one corner has
+//! cancels out of the totals; the summary also counts wins by corner, which is how such an edge shows up.
+//! `--turn N` plays only arrangement `N` (player `p` in corner `(p + N) % players`).
+//!
 //! `--idle 1` leaves player 1 without an AI, to check the opponent can beat a player who does nothing.
 
-use ai3d::skirmish::skirmish;
+use ai3d::skirmish::skirmish_turned;
 use ai3d::{Ai, Settings, defeated, winner};
 use rts_core::hash::hash_of;
 use sim3d::world::{Event, World};
@@ -20,10 +24,11 @@ struct Args {
     every: u32,
     players: u8,
     idle: Vec<u8>,
+    turn: Option<u8>,
 }
 
 fn parse() -> Args {
-    let mut args = Args { seeds: (1, 1), ticks: 36_000, every: 0, players: 2, idle: Vec::new() };
+    let mut args = Args { seeds: (1, 1), ticks: 36_000, every: 0, players: 2, idle: Vec::new(), turn: None };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
         let value = it.next().unwrap_or_else(|| usage(&format!("{flag} needs a value")));
@@ -37,6 +42,7 @@ fn parse() -> Args {
             "--ticks" => args.ticks = int(&value) as u32,
             "--every" => args.every = int(&value) as u32,
             "--players" => args.players = int(&value).clamp(2, 4) as u8,
+            "--turn" => args.turn = Some(int(&value) as u8),
             "--idle" => args.idle = value.split(',').map(|p| int(p) as u8).collect(),
             _ => usage(&format!("unknown flag {flag}")),
         }
@@ -46,7 +52,7 @@ fn parse() -> Args {
 
 fn usage(error: &str) -> ! {
     eprintln!(
-        "{error}\nusage: selfplay [--seed N | --seeds A..B] [--ticks N] [--every N] [--players 2-4] [--idle P,..]"
+        "{error}\nusage: selfplay [--seed N | --seeds A..B] [--ticks N] [--every N] [--players 2-4] [--turn N] [--idle P,..]"
     );
     exit(2)
 }
@@ -62,8 +68,8 @@ struct Game {
     lost: Vec<u32>,
 }
 
-fn play(seed: i32, args: &Args) -> Game {
-    let mut world = skirmish(seed, args.players);
+fn play(seed: i32, turn: u8, args: &Args) -> Game {
+    let mut world = skirmish_turned(seed, args.players, turn);
     let players: Vec<u8> = (0..args.players).collect();
     let mut ais: Vec<Ai> =
         players.iter().filter(|p| !args.idle.contains(p)).map(|&p| Ai::new(p, Settings::normal())).collect();
@@ -131,28 +137,40 @@ fn names(count: &[u32]) -> String {
 
 fn main() {
     let args = parse();
-    let mut wins = vec![0u32; usize::from(args.players)];
-    let (mut draws, mut ticks) = (0u32, 0u64);
-    let games = (args.seeds.1 - args.seeds.0 + 1).max(0);
+    let players = usize::from(args.players);
+    let turns: Vec<u8> = match args.turn {
+        Some(t) => vec![t % args.players],
+        None => (0..args.players).collect(),
+    };
+    let (mut wins, mut corner_wins) = (vec![0u32; players], vec![0u32; players]);
+    let (mut games, mut draws, mut ticks) = (0u32, 0u32, 0u64);
     for seed in args.seeds.0..=args.seeds.1 {
-        let g = play(seed, &args);
-        let result = match g.winner {
-            Some(p) => {
-                wins[usize::from(p)] += 1;
-                format!("player {p} won at tick {}", g.tick)
+        for &turn in &turns {
+            let g = play(seed, turn, &args);
+            let result = match g.winner {
+                Some(p) => {
+                    let corner = (usize::from(p) + usize::from(turn)) % players;
+                    wins[usize::from(p)] += 1;
+                    corner_wins[corner] += 1;
+                    format!("player {p} won from corner {corner} at tick {}", g.tick)
+                }
+                None => {
+                    draws += 1;
+                    format!("no winner by tick {}", g.tick)
+                }
+            };
+            games += 1;
+            ticks += u64::from(g.tick);
+            println!("seed {seed} turn {turn}: {result}, hash {:08x}", g.hash);
+            for (p, kinds) in g.built.iter().enumerate() {
+                println!("  player {p} built {} and lost {}", names(kinds), g.lost[p]);
             }
-            None => {
-                draws += 1;
-                format!("no winner by tick {}", g.tick)
-            }
-        };
-        ticks += u64::from(g.tick);
-        println!("seed {seed}: {result}, hash {:08x}", g.hash);
-        for (p, kinds) in g.built.iter().enumerate() {
-            println!("  player {p} built {} and lost {}", names(kinds), g.lost[p]);
         }
     }
     if games > 1 {
-        println!("{games} games: wins {wins:?}, no winner {draws}, mean length {} ticks", ticks / games as u64);
+        println!(
+            "{games} games: wins by player {wins:?}, by corner {corner_wins:?}, no winner {draws}, mean length {} ticks",
+            ticks / u64::from(games)
+        );
     }
 }

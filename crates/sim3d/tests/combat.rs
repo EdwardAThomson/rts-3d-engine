@@ -386,7 +386,7 @@ fn a_replay_of_a_battle_matches_tick_for_tick() {
         assert_eq!(hash_of(&replay).value(), *expected, "replay diverged at tick {i}");
     }
     // The golden hash pins today's combat rules. If a change moves it, say so and update it on purpose.
-    assert_eq!(hash_of(&live).hex(), "b1d932fd");
+    assert_eq!(hash_of(&live).hex(), "8fc93b66");
 }
 
 const LIGHT: usize = 0;
@@ -506,5 +506,38 @@ fn a_replay_of_an_attack_move_matches() {
         }
         replay.step();
         assert_eq!(hash_of(&replay).value(), *expected, "replay diverged at tick {i}");
+    }
+}
+
+/// A shot and its mirror image, turned half a turn about the middle of the map, fly and land as mirror images, so
+/// no side of a mirrored map shoots straighter.
+#[test]
+fn a_shot_and_its_mirror_image_land_as_mirror_images() {
+    let size = 16;
+    let mirror = |(x, y): (i32, i32)| (size * SUB - x, size * SUB - y);
+    for kind in [TANK, HIGH_LOB, LOW_LOB] {
+        let mut a = World::new(Heightmap::flat(size, size, 0), types(), 1);
+        let mut b = World::new(Heightmap::flat(size, size, 0), types(), 1);
+        let (gun, target) = ((1000, 1300), (2401, 2003));
+        let ga = spawn(&mut a, kind, gun);
+        let ta = spawn(&mut a, TARGET, target);
+        let gb = spawn(&mut b, kind, mirror(gun));
+        let tb = spawn(&mut b, TARGET, mirror(target));
+        a.command(Command::Attack { unit: ga, target: ta });
+        b.command(Command::Attack { unit: gb, target: tb });
+        let landed = |events: Vec<(u32, Event)>, flip: bool| -> Vec<(u32, (i32, i32))> {
+            let at = |v: sim3d::space::Vec3| if flip { mirror((v.x, v.y)) } else { (v.x, v.y) };
+            events
+                .into_iter()
+                .filter_map(|(t, e)| matches!(e, Event::Impact { .. }).then(|| (t, e)))
+                .map(|(t, e)| match e {
+                    Event::Impact { at: p, .. } => (t, at(p)),
+                    _ => unreachable!(),
+                })
+                .collect()
+        };
+        let (la, lb) = (landed(run(&mut a, 200), false), landed(run(&mut b, 200), true));
+        assert!(!la.is_empty());
+        assert_eq!(la, lb, "weapon kind {kind}");
     }
 }
