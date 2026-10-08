@@ -150,6 +150,9 @@ for (const run of runs) {
   const stopped = await titled(/^(?!.*placing)/);
   await page.mouse.click(830, 530);
   const helperOff = await titled(/helper off/);
+  // M mutes the sound, which opened on the first click.
+  await page.keyboard.press("KeyM");
+  const muted = await titled(/muted/);
   const shot = await frame(page, run);
   if (shot.png) writeFileSync(`${out}/play3d-${run.name}.png`, shot.png);
   // The wheel zooms in at the cursor: with the game paused, the next frame differs.
@@ -168,6 +171,7 @@ for (const run of runs) {
     "a panel button starts placing": placing,
     "Escape stops placing": stopped,
     "the panel turns the helper off": helperOff,
+    "M mutes": muted,
     "the wheel zooms": zoomed.colours >= 64 && zoomed.print !== shot.print,
     "no errors": errors.length === 0,
   };

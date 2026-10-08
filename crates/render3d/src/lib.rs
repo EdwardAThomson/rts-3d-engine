@@ -2,22 +2,27 @@
 //! with the Classic engine. It reads the world and never changes it.
 //!
 //! - `control`: playing one side with the mouse: selecting, and orders from where the cursor points.
+//! - `effects`: flashes, bursts, blasts and smoke from the world's events, as soft blobs facing the camera.
 //! - `shapes`: what to draw, as plain boxes in view space, worked out from the world with no GPU, so it is tested on
 //!   its own. Units, structures and frames, projectiles, wrecks and resource spots each get a box.
 //! - `model`: the art studio's models read from glTF files, and where each is drawn over its unit's shape. `json`
 //!   reads their headers.
 //! - `panel`: the side panel: a minimap, the side's stock, buttons for what the selection builds, and placing a
 //!   structure; drawn with the platform's sprite batch beside the scene.
+//! - `sound`: sounds made in code for shots, hits, blasts and your side's building, played through the platform's
+//!   mixer by where on screen they happen.
 //! - `renderer`: the GPU side: the terrain mesh from `view3d`, the boxes as instances of one cube, depth, and simple
 //!   sunlight, and flat rectangles over it all for the drag box.
 
 pub mod control;
+pub mod effects;
 pub mod json;
 pub mod model;
 mod model_gpu;
 pub mod panel;
 pub mod renderer;
 pub mod shapes;
+pub mod sound;
 
 pub use renderer::Renderer;
 pub use shapes::{Shape, Shapes};

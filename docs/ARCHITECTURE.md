@@ -37,8 +37,8 @@ units per side; measurements decide whether we go further.
 | `sim3d` | Intent orders in `world/intent.rs` (docs/intent.md): patrols that fight on the way and turn round, factories that keep a count of each unit type their owner wants, and units that fall back to a point when badly hurt. All are state, so they hash and replay like any order. | Started |
 | later: economy | Assisting factories, reclaiming frames, build priorities, rally points, upkeep. | Planned |
 | `view3d` | The renderer's groundwork, with no GPU code (docs/view.md): a strategic-zoom camera that tilts from an angled close view to straight down over the whole map and zooms at the cursor, the terrain mesh at full or coarser detail, and ground picking against the simulation's own heights. Floating point is fine here: it only reads the state. | Started |
-| `render3d` | The renderer (docs/render.md): the terrain, the art studio's glTF models for units and frames (turned the way they move, turrets to their targets, painted in their owner's colour), wrecks as their burnt, flattened models, and a box for every shot and spot, drawn with wgpu on `rts-platform` (the platform layer shared with the Classic engine, in the `rts-core` repository), sliding between ticks; tested offscreen. The `play3d` viewer lets you play a side of the generic skirmish with the mouse (select, move, attack, attack-move, help build, reclaim) and a side panel (minimap, stock, build and production buttons, placing structures; a computer helper you can switch off runs your base) or watch computer players, on the desktop or in the browser (WebGPU or WebGL2). | Started |
-| later: renderer | Control groups and rally points, wrecks that smoke and burn out, sound, effects from `events`. | Planned |
+| `render3d` | The renderer (docs/render.md): the terrain, the art studio's glTF models for units and frames (turned the way they move, turrets to their targets, painted in their owner's colour), wrecks as their burnt, flattened models, and a box for every shot and spot, drawn with wgpu on `rts-platform` (the platform layer shared with the Classic engine, in the `rts-core` repository), sliding between ticks; tested offscreen. The `play3d` viewer lets you play a side of the generic skirmish with the mouse (select, move, attack, attack-move, help build, reclaim) and a side panel (minimap, stock, build and production buttons, placing structures; a computer helper you can switch off runs your base), with flashes, fire, smoke and sound from the game's events, or watch computer players, on the desktop or in the browser (WebGPU or WebGL2). | Started |
+| later: renderer | Control groups and rally points, sounds and effects from a setting pack, music. | Planned |
 
 ## Roadmap
 
@@ -52,7 +52,7 @@ Agreed with Ed on 7 Oct 2026; the order can change as we learn.
 5. Renderer: wgpu with strategic zoom, on the platform layer shared with the Classic engine (window, input, GPU
    setup, textures, text, audio), now the `rts-platform` crate in the `rts-core` repository. Started: `view3d`
    (camera, terrain mesh, picking) and `render3d` (drawing the art studio's models, playing a side with the mouse
-   and a side panel for building and production, on the desktop and in the browser).
+   and a side panel for building and production, effects and sound, on the desktop and in the browser).
 6. Polish: turrets and facing, formations, a high-ground range bonus, craters, saving games to disk.
 
 ## Decisions so far

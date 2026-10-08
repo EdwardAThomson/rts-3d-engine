@@ -18,8 +18,9 @@
 //! the plain boxes instead.
 //!
 //! The mouse wheel zooms at the cursor, from a few units up to the whole map. Arrow keys or WASD pan, Q and E turn the
-//! camera, space pauses, + and - change the game speed, Home shows the whole map again and Escape quits. The title
-//! bar and the foot of the panel show the tick, the speed and the winner. `--frames N` quits after N frames, for smoke tests.
+//! camera, space pauses, M mutes the sound, + and - change the game speed, Home shows the whole map again and Escape
+//! quits. The title bar and the foot of the panel show the tick, the speed and the winner. `--frames N` quits after N
+//! frames, for smoke tests. Shots, hits and blasts make sound and draw flashes, fire and smoke (`sound`, `effects`).
 //!
 //! The simulation runs at a fixed 30 ticks a second of game time (a viewer's choice; the simulation itself has no
 //! clock), and units slide between ticks so motion is smooth at any frame rate.
@@ -30,12 +31,16 @@ use std::time::Duration;
 
 use ai3d::{Ai, Settings, skirmish};
 use render3d::control::{Control, Screen, outline};
+use render3d::effects::Effects;
 use render3d::panel::{self, Clicked, Names, Panel};
+use render3d::sound::Sounds;
 use render3d::{Renderer, Shapes};
+use rts_platform::audio::Mixer;
 use rts_platform::batch::SpriteBatch;
 use rts_platform::text::Font;
 use rts_platform::{Gpu, Instant};
 use sim3d::world::World;
+use std::sync::Mutex;
 use view3d::camera::Camera;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -96,6 +101,13 @@ struct App {
     /// The person's side, unless they are only watching.
     control: Option<Control>,
     panel: Panel,
+    effects: Effects,
+    /// The sounds' mixer, shared with the sound card's thread, and the sound card once it is open.
+    mixer: Arc<Mutex<Mixer>>,
+    sounds: Sounds,
+    #[cfg(feature = "sound")]
+    speaker: Option<rts_platform::audio::Speaker>,
+    speaker_tried: bool,
     /// Whether the left button went down on the minimap and is still held, so moving looks along.
     looking: bool,
     modifiers: ModifiersState,
@@ -119,6 +131,8 @@ struct App {
 impl App {
     fn new(seed: i32, players: u8, watch: bool) -> App {
         let world = skirmish::skirmish(seed, players);
+        let mut mixer = Mixer::new(48_000);
+        let sounds = Sounds::new(&mut mixer);
         let camera = Camera::new(world.map());
         let names = Names {
             kinds: skirmish::KINDS.iter().map(|k| k.to_string()).collect(),
@@ -131,6 +145,12 @@ impl App {
             ais: (0..players).map(|p| Ai::new(p, Settings::normal())).collect(),
             control: (!watch).then(|| Control::new(0)),
             panel,
+            effects: Effects::default(),
+            mixer: Arc::new(Mutex::new(mixer)),
+            sounds,
+            #[cfg(feature = "sound")]
+            speaker: None,
+            speaker_tried: false,
             looking: false,
             modifiers: ModifiersState::empty(),
             world,
@@ -177,7 +197,9 @@ impl App {
                 }
             }
             self.shapes.remember(&self.world);
-            self.world.step();
+            let events = self.world.step();
+            self.effects.observe(&self.world, &events);
+            self.play(&events);
             self.owed -= TICK;
             ran += 1;
         }
@@ -211,7 +233,51 @@ impl App {
         if self.control.is_some() && !self.panel.helper {
             selected += ", helper off";
         }
+        if self.mixer.lock().is_ok_and(|m| m.muted) {
+            selected += ", muted";
+        }
         format!("3D RTS viewer: tick {}, speed {}x{selected}{state}", self.world.tick(), SPEEDS[self.speed])
+    }
+
+    /// Play the sounds for a tick's events, if the sound card is open.
+    fn play(&mut self, events: &[sim3d::world::Event]) {
+        if !self.speaker_open() {
+            return;
+        }
+        let Some(screen) = self.screen() else { return };
+        let scene = self.panel.layout(screen).scene;
+        let player = self.control.as_ref().map(|c| c.player);
+        let sounds = self.sounds.for_events(&self.world, events, &self.camera, scene, player);
+        if let Ok(mut mixer) = self.mixer.lock() {
+            for s in sounds {
+                mixer.play(s);
+            }
+        }
+    }
+
+    fn speaker_open(&self) -> bool {
+        #[cfg(feature = "sound")]
+        return self.speaker.is_some();
+        #[cfg(not(feature = "sound"))]
+        false
+    }
+
+    /// Open the sound card, once. No sound card (a server, a CI runner) just means a silent game. Browsers only let
+    /// a page make sound after the person has clicked or pressed a key, so there it opens on the first one.
+    fn open_speaker(&mut self) {
+        let first = !std::mem::replace(&mut self.speaker_tried, true);
+        #[cfg(feature = "sound")]
+        if first {
+            match rts_platform::audio::Speaker::open(self.mixer.clone()) {
+                Ok(s) => {
+                    say(&format!("sound on {}", s.describe));
+                    self.speaker = Some(s);
+                }
+                Err(e) => say(&format!("playing without sound: {e}")),
+            }
+        }
+        #[cfg(not(feature = "sound"))]
+        let _ = first;
     }
 
     /// The game's state for the foot of the panel.
@@ -271,6 +337,8 @@ impl App {
             }
         }
         run.renderer.set_overlay(&overlay);
+        let now = self.world.tick() as f32 - 1.0 + alpha;
+        run.renderer.set_effects(&self.effects.puffs(&self.world, now, self.camera.pose().eye));
         run.renderer.set_area(Some((scene.width as u32, scene.height as u32)));
         let texture = match run.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -319,6 +387,10 @@ impl App {
         let mut batch = SpriteBatch::new(&gpu, config.format);
         let font = Font::new(&gpu, &mut batch);
         self.run = Some(Running { window, surface, config, gpu, renderer, batch, font });
+        // The desktop can make sound straight away; a browser waits for the first click or key.
+        if cfg!(not(target_arch = "wasm32")) {
+            self.open_speaker();
+        }
         self.last = Instant::now();
     }
 
@@ -328,6 +400,7 @@ impl App {
     }
 
     fn click(&mut self, button: MouseButton, state: ElementState) {
+        self.open_speaker();
         let Some(screen) = self.screen() else { return };
         let Some(control) = &mut self.control else { return };
         let scene = self.panel.layout(screen).scene;
@@ -381,7 +454,13 @@ impl App {
     }
 
     fn key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
+        self.open_speaker();
         match code {
+            KeyCode::KeyM => {
+                if let Ok(mut m) = self.mixer.lock() {
+                    m.muted = !m.muted;
+                }
+            }
             KeyCode::Escape if self.panel.placing.is_some() => self.panel.placing = None,
             KeyCode::Escape if cfg!(not(target_arch = "wasm32")) => event_loop.exit(),
             KeyCode::Space => self.paused = !self.paused,

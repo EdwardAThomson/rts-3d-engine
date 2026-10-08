@@ -10,6 +10,7 @@ use view3d::maths::normalize;
 use view3d::terrain;
 
 use crate::control::Rect;
+use crate::effects::Puff;
 use crate::model::Models;
 use crate::model_gpu::ModelDrawer;
 use crate::shapes::Shape;
@@ -22,6 +23,8 @@ const VERTEX: u64 = 24;
 const INSTANCE: u64 = 28;
 /// Bytes per overlay rectangle: its corners in clip space and a colour.
 const FLAT: u64 = 20;
+/// Bytes per effect blob: its centre and radius, a colour and how much it glows.
+const PUFF: u64 = 24;
 
 /// The direction towards the sun: low in the west-north-west, so slopes facing away from it fall into shade and
 /// hills read as hills.
@@ -49,6 +52,10 @@ pub struct Renderer {
     /// Rectangles drawn over the scene until changed, and their buffer.
     overlay: Vec<Rect>,
     flats: Option<wgpu::Buffer>,
+    puff_pipeline: wgpu::RenderPipeline,
+    /// Effect blobs drawn from the next frame on, and their buffer.
+    puffs: Vec<Puff>,
+    puff_buffer: Option<wgpu::Buffer>,
     /// The part of the target the scene fills, from its top left, when it leaves room for a panel; see `set_area`.
     area: Option<(u32, u32)>,
 }
@@ -169,9 +176,46 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        // Effects blend premultiplied colour over the scene, tested against depth but never writing it.
+        let puff = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Unorm8x4];
+        let puff_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("effects"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_puff"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: PUFF,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &puff,
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_puff"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
-            size: 80,
+            size: 112,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -199,6 +243,9 @@ impl Renderer {
             depth: None,
             overlay: Vec::new(),
             flats: None,
+            puff_pipeline,
+            puffs: Vec::new(),
+            puff_buffer: None,
             area: None,
         }
     }
@@ -211,6 +258,11 @@ impl Renderer {
     /// Rectangles to draw over the scene from the next frame on, in pixels from the top left; empty for none.
     pub fn set_overlay(&mut self, rects: &[Rect]) {
         self.overlay = rects.to_vec();
+    }
+
+    /// Effect blobs to draw over the scene from the next frame on (see `effects`); empty for none.
+    pub fn set_effects(&mut self, puffs: &[Puff]) {
+        self.puffs = puffs.to_vec();
     }
 
     /// Draw the scene into only the `width` by `height` pixels at the target's top left from now on, over what is
@@ -242,7 +294,8 @@ impl Renderer {
                 globals.extend_from_slice(&f.to_le_bytes());
             }
         }
-        for f in normalize(SUN).into_iter().chain([0.0]) {
+        let pose = camera.pose();
+        for f in normalize(SUN).into_iter().chain([0.0]).chain(pose.right).chain([0.0]).chain(pose.up).chain([0.0]) {
             globals.extend_from_slice(&f.to_le_bytes());
         }
         gpu.queue.write_buffer(&self.globals, 0, &globals);
@@ -272,6 +325,9 @@ impl Renderer {
         }
         if !self.overlay.is_empty() {
             self.upload_overlay(gpu, (width as f32, height as f32));
+        }
+        if !self.puffs.is_empty() {
+            self.upload_puffs(gpu);
         }
         let (tw, th) = target_size;
         if self.depth.as_ref().is_none_or(|d| (d.0, d.1) != (tw, th)) {
@@ -334,6 +390,12 @@ impl Renderer {
                 pass.draw_indexed(0..36, 0, 0..shapes.len() as u32);
             }
             self.models.draw(&mut pass);
+            if let Some(puffs) = self.puff_buffer.as_ref().filter(|_| !self.puffs.is_empty()) {
+                pass.set_pipeline(&self.puff_pipeline);
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                pass.set_vertex_buffer(0, puffs.slice(..));
+                pass.draw(0..6, 0..self.puffs.len() as u32);
+            }
             if let Some(flats) = self.flats.as_ref().filter(|_| !self.overlay.is_empty()) {
                 pass.set_pipeline(&self.overlay_pipeline);
                 pass.set_vertex_buffer(0, flats.slice(..));
@@ -361,6 +423,27 @@ impl Renderer {
             }));
         }
         gpu.queue.write_buffer(self.instances.as_ref().expect("made above"), 0, &bytes);
+    }
+
+    /// Copy the effect blobs to the GPU, growing the buffer when it is too small.
+    fn upload_puffs(&mut self, gpu: &Gpu) {
+        let mut bytes = Vec::with_capacity(self.puffs.len() * PUFF as usize);
+        for p in &self.puffs {
+            for f in p.at.iter().chain([&p.radius]) {
+                bytes.extend_from_slice(&f.to_le_bytes());
+            }
+            bytes.extend_from_slice(&p.colour);
+            bytes.extend_from_slice(&[(p.glow.clamp(0.0, 1.0) * 255.0) as u8, 0, 0, 0]);
+        }
+        if self.puff_buffer.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
+            self.puff_buffer = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("effects"),
+                size: (bytes.len() as u64).next_power_of_two().max(4096),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        gpu.queue.write_buffer(self.puff_buffer.as_ref().expect("made above"), 0, &bytes);
     }
 
     /// Copy the overlay to the GPU in clip space for a `width` by `height` target.

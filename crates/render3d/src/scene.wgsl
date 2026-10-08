@@ -4,6 +4,9 @@ struct Globals {
     view_proj: mat4x4<f32>,
     // xyz: the direction towards the sun; w: unused.
     sun: vec4<f32>,
+    // The camera's right and up directions in view space, for quads that face it; w: unused.
+    right: vec4<f32>,
+    up: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -138,4 +141,48 @@ fn fs_model(in: Model) -> @location(0) vec4<f32> {
     let colour = mix(painted, vec3<f32>(1.0), 0.5 * frame) * (1.0 - 0.7 * wreck);
     let light = 0.3 + 0.7 * max(dot(normalize(in.normal), globals.sun.xyz), 0.0);
     return vec4<f32>(colour * light, 1.0);
+}
+
+// Effects: soft round blobs of light, fire and smoke, each a quad turned to face the camera and blended over the
+// scene. They are tested against the depth buffer, so hills and models hide them, but don't write to it.
+struct Puff {
+    @builtin(position) clip: vec4<f32>,
+    // From -1 to 1 across the quad.
+    @location(0) at: vec2<f32>,
+    @location(1) colour: vec4<f32>,
+    // 1 for a glow that brightens what is behind it, 0 for smoke that covers it.
+    @location(2) glow: f32,
+};
+
+@vertex
+fn vs_puff(
+    @builtin(vertex_index) i: u32,
+    @location(0) centre: vec4<f32>,
+    @location(1) colour: vec4<f32>,
+    // x: the glow; the rest pad it to four bytes.
+    @location(2) glow: vec4<f32>,
+) -> Puff {
+    // The same six corners as the overlay's.
+    let x = select(-1.0, 1.0, ((0x32u >> i) & 1u) == 1u);
+    let y = select(-1.0, 1.0, ((0x2cu >> i) & 1u) == 1u);
+    // centre.w is the blob's radius in cells.
+    let world = centre.xyz + (globals.right.xyz * x + globals.up.xyz * y) * centre.w;
+    var out: Puff;
+    out.clip = globals.view_proj * vec4<f32>(world, 1.0);
+    out.at = vec2<f32>(x, y);
+    out.colour = colour;
+    out.glow = glow.x;
+    return out;
+}
+
+@fragment
+fn fs_puff(in: Puff) -> @location(0) vec4<f32> {
+    let d = length(in.at);
+    let soft = 1.0 - smoothstep(0.35, 1.0, d);
+    let a = in.colour.a * soft;
+    if (a < 0.004) {
+        discard;
+    }
+    // Premultiplied: a glow adds its light, smoke covers what is behind in proportion.
+    return vec4<f32>(in.colour.rgb * a, a * (1.0 - in.glow));
 }

@@ -54,6 +54,21 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    how many are queued and the first one's progress; a right-click empties those factories' queues. Factories and
    builders you give orders to are yours, as in rule 7. The names on it come from the setting (`Names`); the
    layout follows the classic 1990s sidebar. Like `control`, what a click does is worked out with no GPU.
+9. **Effects come from `events`.** `effects` turns each tick's events into soft round blobs that face the camera
+   (`Puff`), worked out with no GPU from the time since the event: a flash at the muzzle when a unit fires, a burst
+   of fire and dust where a shot lands (bigger for a shell with splash), a blast where a unit is destroyed (bigger
+   for a building), and smoke rising from every wreck, a vehicle's for 8 seconds and a building's for 30, with fire
+   at a building's foot for the first third; smoke stops when the wreck is cleared. The renderer draws them last,
+   tested against depth so hills and models hide them, without writing it; fire and flashes add light, smoke
+   covers what is behind it, farthest first.
+10. **Sound comes from `events` too.** `sound` makes its clips in code (generic placeholders until a setting pack
+   brings its own) and plays them through `rts-platform`'s mixer: a crack for a shot, a boom for a shell, a thud
+   where it lands, a blast when a unit is destroyed and a bigger one for a building, and for your own side only, a
+   clunk when a frame is placed and a chime when something is finished. Battle sounds are loudest near the middle
+   of the view, fade over the ground it covers, are quieter off screen and when pulled right back, and pan to where
+   on screen they happen. The sound card (the `sound` feature, on by default) opens at the start on the desktop and
+   on the first click or key in the browser, which only allows sound after one; with no sound card the viewer is
+   silent. M mutes.
 
 ## The viewer
 
@@ -71,7 +86,7 @@ turns the helper off, so the whole side is yours, and `--helper 0` (`?helper=0`)
 (`?watch=1` in the browser) leaves every side to the computer, and `--boxes 1` draws boxes in place of the models.
 The wheel zooms at the cursor, arrow keys or WASD
 pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape stops
-placing a structure, or else quits.
+placing a structure, or else quits. M mutes the sound.
 The game runs at 30 ticks a second of game time; that rate is the viewer's choice, since the simulation has no
 clock.
 
@@ -87,13 +102,12 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 `wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
 Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
-Escape stops it, the helper's switch turns it off, and the wheel zooms.
+Escape stops it, the helper's switch turns it off, M mutes, and the wheel zooms.
 
 ## Later
 
 - Double-click to select every unit of a kind on screen; control groups; rally points for factories.
 - Icons when zoomed far out; the detailed models close in.
 - Models for other settings, read from a setting pack instead of built into the program.
-- Sound from `rts-platform`'s mixer.
-- Effects from `events`: muzzle flashes, impacts, wrecks burning.
+- Sounds and effects from a setting pack instead of made in code; music.
 - Units tilted to the slope they stand on; today a level box sinks into a hillside.

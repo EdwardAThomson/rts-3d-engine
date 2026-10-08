@@ -43,4 +43,6 @@ cargo build --release --target wasm32-unknown-unknown -p sim3d   # the simulatio
 There is no window to play in on `main` yet. The renderer in pull request #12 adds one
 (`cargo run --release -p render3d --bin play3d`); it draws with wgpu, so it needs a GPU driver (Vulkan, Metal or
 DirectX 12), or Mesa's software GPU and a virtual display on a machine without one
-(`sudo apt-get install mesa-vulkan-drivers xvfb`, then `xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 120`).
+(`sudo apt-get install mesa-vulkan-drivers xvfb libasound2-dev`, then
+`xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 120`). `libasound2-dev` is for the sound;
+`--no-default-features` builds a silent viewer without it.
