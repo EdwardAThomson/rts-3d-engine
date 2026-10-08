@@ -34,11 +34,23 @@ pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home show
 The game runs at 30 ticks a second of game time; that rate is the viewer's choice, since the simulation has no
 clock.
 
+The same viewer runs in the browser, drawing with WebGPU, or WebGL2 where the browser has no WebGPU, with the
+options in the page address (`?seed=3&players=4&speed=8`):
+
+```bash
+cargo build --release --target wasm32-unknown-unknown -p render3d --bin play3d
+wasm-bindgen --target web --no-typescript --out-dir web/play3d/pkg target/wasm32-unknown-unknown/release/play3d.wasm
+python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
+```
+
+`wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
+`web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
+Space pauses and the wheel zooms.
+
 ## Later
 
 - Playing, not only watching: selecting units with the mouse and giving orders through `view3d::pick`.
 - Models from the art studio's glTF exports in place of boxes, with icons when zoomed far out.
 - A HUD with the sprite batcher and font from `rts-platform`, and sound from its mixer.
 - Effects from `events`: muzzle flashes, impacts, wrecks burning.
-- The browser build, as the Classic engine's player does.
 - Units tilted to the slope they stand on; today a level box sinks into a hillside.

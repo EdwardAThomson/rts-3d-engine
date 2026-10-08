@@ -21,6 +21,8 @@ with wgpu on the platform layer shared with the Classic engine (docs/render.md).
 cargo run --release -p render3d --bin play3d -- --seed 1
 ```
 
+It also runs in the browser on WebGPU or WebGL2 (`web/play3d/`; docs/render.md says how to build it).
+
 See `docs/ARCHITECTURE.md` for the plan and `CLAUDE.md` for the rules and commands.
 
 ## Install and run

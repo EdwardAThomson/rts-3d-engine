@@ -27,3 +27,16 @@ jobs:
       - run: cargo build --release --target wasm32-unknown-unknown -p sim3d
       - name: The viewer opens a window and draws
         run: xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 60 --speed 8
+      - run: cargo clippy --target wasm32-unknown-unknown -p render3d -- -D warnings
+      # The same viewer in headless Chromium, drawing with WebGPU and then WebGL2 on its software GPU. wasm-bindgen's
+      # command-line tool must match the library version in Cargo.lock.
+      - name: The viewer runs in the browser on WebGPU and WebGL2
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p render3d --bin play3d
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
+          curl -sSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/wasm-bindgen-$v-x86_64-unknown-linux-musl.tar.gz" | tar xz -C /tmp
+          /tmp/wasm-bindgen-$v-x86_64-unknown-linux-musl/wasm-bindgen --target web --no-typescript --out-dir web/play3d/pkg target/wasm32-unknown-unknown/release/play3d.wasm
+          npm install --no-save playwright && npx playwright install --with-deps chromium
+          python3 -m http.server 8000 &
+          sleep 1
+          node web/play3d/check.mjs http://localhost:8000
