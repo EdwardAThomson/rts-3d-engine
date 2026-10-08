@@ -8,8 +8,11 @@ publish.workspace = true
 
 # The renderer is the one part of this engine with third-party dependencies (Ed chose wgpu, 2026-10-07): wgpu draws on
 # every desktop GPU API and on the web, winit opens the window, and pollster waits for wgpu's async set-up. The GPU
-# set-up itself comes from `rts-platform`, the platform layer shared with the Classic engine (Ed, 2026-10-08), with no
-# sound yet so nothing needs ALSA to build. The simulation crates still have no dependencies beyond rts-core.
+# set-up itself comes from `rts-platform`, the platform layer shared with the Classic engine (Ed, 2026-10-08), whose
+# mixer plays the sounds; its sound card (cpal) comes with the `sound` feature, on by default, which on Linux needs
+# ALSA's headers to build (`libasound2-dev`); `--no-default-features` builds a silent viewer without them. png reads the textures inside the art studio's glTF models (the Classic
+# engine's renderer uses the same crate); the glTF files themselves are read by our own small reader. The simulation
+# crates still have no dependencies beyond rts-core.
 [dependencies]
 sim3d = { path = "../sim3d" }
 view3d = { path = "../view3d" }
@@ -17,9 +20,14 @@ ai3d = { path = "../ai3d" }
 rts-platform = { git = "https://github.com/EdwardAThomson/rts-core", rev = "aa9c34a01b36116e2eb724b86e9a98dd39037b7a", default-features = false }
 wgpu = "30"
 winit = "0.30"
+png = "0.18"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1"
+
+[features]
+default = ["sound"]
+sound = ["rts-platform/device"]
 
 # The browser build: WebGL2 as well as WebGPU, and the bindings wgpu and winit already use to wait for the GPU.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -19,8 +19,8 @@ cargo run --release -p render3d --bin play3d                     # play a side w
 ```
 
 The toolchain is pinned in `rust-toolchain.toml`. Only the renderer (`render3d`) has third-party dependencies (wgpu,
-winit, and `rts-platform` from the rts-core repository); add another only when it clearly pays for itself. Its
-tests draw offscreen and need a GPU adapter; Mesa's software one will do.
+winit, and `rts-platform` from the rts-core repository, whose sound card needs `libasound2-dev` on Linux); add another
+only when it clearly pays for itself. Its tests draw offscreen and need a GPU adapter; Mesa's software one will do.
 
 ## Rules
 

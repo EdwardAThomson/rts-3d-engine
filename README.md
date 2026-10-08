@@ -15,7 +15,9 @@ cargo run --release -p ai3d --bin selfplay -- --seeds 1..10
 ```
 
 `crates/view3d` has the camera, terrain mesh and ground picking (docs/view.md), and `crates/render3d` draws a game
-with wgpu on the platform layer shared with the Classic engine (docs/render.md). Play the blue side against a computer player with the mouse:
+with wgpu on the platform layer shared with the Classic engine (docs/render.md), with the art studio's models
+(`assets/skirmish/models/`). Play the blue side against a computer player with the mouse, building and producing
+from the panel on the right (`--helper 0` leaves the whole side to you):
 
 ```bash
 cargo run --release -p render3d --bin play3d -- --seed 1
@@ -41,4 +43,6 @@ cargo build --release --target wasm32-unknown-unknown -p sim3d   # the simulatio
 There is no window to play in on `main` yet. The renderer in pull request #12 adds one
 (`cargo run --release -p render3d --bin play3d`); it draws with wgpu, so it needs a GPU driver (Vulkan, Metal or
 DirectX 12), or Mesa's software GPU and a virtual display on a machine without one
-(`sudo apt-get install mesa-vulkan-drivers xvfb`, then `xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 120`).
+(`sudo apt-get install mesa-vulkan-drivers xvfb libasound2-dev`, then
+`xvfb-run -a cargo run --release -p render3d --bin play3d -- --frames 120`). `libasound2-dev` is for the sound;
+`--no-default-features` builds a silent viewer without it.

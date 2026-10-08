@@ -1,0 +1,12 @@
+{
+  "about": "Models for the generic skirmish's unit kinds (ai3d::skirmish::KINDS), exported from the art studio in rts-engine (art/studio/export_gltf.py --lod low) from these generic studio models: builder vehicles/mcv, generator buildings/power_plant, extractor buildings/silo, factory buildings/heavy_factory, tank vehicles/battle_tank, artillery vehicles/missile_tank.",
+  "metres_per_cell": 10.67,
+  "kinds": {
+    "builder": "builder.glb",
+    "generator": "generator.glb",
+    "extractor": "extractor.glb",
+    "factory": "factory.glb",
+    "tank": "tank.glb",
+    "artillery": "artillery.glb"
+  }
+}

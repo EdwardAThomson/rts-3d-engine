@@ -10,6 +10,9 @@ use view3d::maths::normalize;
 use view3d::terrain;
 
 use crate::control::Rect;
+use crate::effects::Puff;
+use crate::model::Models;
+use crate::model_gpu::ModelDrawer;
 use crate::shapes::Shape;
 
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -20,6 +23,8 @@ const VERTEX: u64 = 24;
 const INSTANCE: u64 = 28;
 /// Bytes per overlay rectangle: its corners in clip space and a colour.
 const FLAT: u64 = 20;
+/// Bytes per effect blob: its centre and radius, a colour and how much it glows.
+const PUFF: u64 = 24;
 
 /// The direction towards the sun: low in the west-north-west, so slopes facing away from it fall into shade and
 /// hills read as hills.
@@ -37,6 +42,7 @@ pub struct Renderer {
     terrain_pipeline: wgpu::RenderPipeline,
     box_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    models: ModelDrawer,
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
     meshes: Vec<Mesh>,
@@ -46,6 +52,12 @@ pub struct Renderer {
     /// Rectangles drawn over the scene until changed, and their buffer.
     overlay: Vec<Rect>,
     flats: Option<wgpu::Buffer>,
+    puff_pipeline: wgpu::RenderPipeline,
+    /// Effect blobs drawn from the next frame on, and their buffer.
+    puffs: Vec<Puff>,
+    puff_buffer: Option<wgpu::Buffer>,
+    /// The part of the target the scene fills, from its top left, when it leaves room for a panel; see `set_area`.
+    area: Option<(u32, u32)>,
 }
 
 impl Renderer {
@@ -164,9 +176,46 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        // Effects blend premultiplied colour over the scene, tested against depth but never writing it.
+        let puff = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Unorm8x4];
+        let puff_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("effects"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_puff"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: PUFF,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &puff,
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_puff"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
-            size: 80,
+            size: 112,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -180,8 +229,10 @@ impl Renderer {
             buffer(gpu, "cube", &corners, wgpu::BufferUsages::VERTEX),
             buffer(gpu, "cube", &indices, wgpu::BufferUsages::INDEX),
         );
+        let models = ModelDrawer::new(gpu, format, &shader, &globals_layout, DEPTH);
         Renderer {
             terrain_pipeline,
+            models,
             box_pipeline,
             overlay_pipeline,
             globals,
@@ -192,7 +243,16 @@ impl Renderer {
             depth: None,
             overlay: Vec::new(),
             flats: None,
+            puff_pipeline,
+            puffs: Vec::new(),
+            puff_buffer: None,
+            area: None,
         }
+    }
+
+    /// Draw each unit kind that has a model with it from now on, in place of its box.
+    pub fn set_models(&mut self, gpu: &Gpu, models: Models) {
+        self.models.set(gpu, models);
     }
 
     /// Rectangles to draw over the scene from the next frame on, in pixels from the top left; empty for none.
@@ -200,8 +260,20 @@ impl Renderer {
         self.overlay = rects.to_vec();
     }
 
+    /// Effect blobs to draw over the scene from the next frame on (see `effects`); empty for none.
+    pub fn set_effects(&mut self, puffs: &[Puff]) {
+        self.puffs = puffs.to_vec();
+    }
+
+    /// Draw the scene into only the `width` by `height` pixels at the target's top left from now on, over what is
+    /// already there (the sky included), so a panel drawn beside it first is kept; `None` fills and clears the
+    /// whole target again.
+    pub fn set_area(&mut self, area: Option<(u32, u32)>) {
+        self.area = area;
+    }
+
     /// Draw the terrain of `world` and `shapes` on it, seen by `camera`, into `target` (`width` by `height`
-    /// pixels) over `sky`.
+    /// pixels) over `sky`, or into the area `set_area` gave.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -214,13 +286,16 @@ impl Renderer {
         sky: [u8; 3],
     ) {
         let map = world.map();
+        let (target_size, area) = ((width, height), self.area);
+        let (width, height) = area.map_or((width, height), |(w, h)| (w.clamp(1, width), h.clamp(1, height)));
         let mut globals = Vec::with_capacity(80);
         for column in camera.view_proj(map, width as f32 / height as f32) {
             for f in column {
                 globals.extend_from_slice(&f.to_le_bytes());
             }
         }
-        for f in normalize(SUN).into_iter().chain([0.0]) {
+        let pose = camera.pose();
+        for f in normalize(SUN).into_iter().chain([0.0]).chain(pose.right).chain([0.0]).chain(pose.up).chain([0.0]) {
             globals.extend_from_slice(&f.to_le_bytes());
         }
         gpu.queue.write_buffer(&self.globals, 0, &globals);
@@ -241,16 +316,24 @@ impl Renderer {
                 count: m.indices.len() as u32,
             });
         }
+        // Units with a model are drawn with it; everything else is a box.
+        self.models.prepare(gpu, shapes);
+        let boxes: Vec<Shape> = shapes.iter().filter(|s| !self.models.draws(s)).copied().collect();
+        let shapes = &boxes[..];
         if !shapes.is_empty() {
             self.upload(gpu, shapes);
         }
         if !self.overlay.is_empty() {
             self.upload_overlay(gpu, (width as f32, height as f32));
         }
-        if self.depth.as_ref().is_none_or(|d| (d.0, d.1) != (width, height)) {
+        if !self.puffs.is_empty() {
+            self.upload_puffs(gpu);
+        }
+        let (tw, th) = target_size;
+        if self.depth.as_ref().is_none_or(|d| (d.0, d.1) != (tw, th)) {
             let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("depth"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -258,7 +341,7 @@ impl Renderer {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             });
-            self.depth = Some((width, height, texture.create_view(&Default::default())));
+            self.depth = Some((tw, th, texture.create_view(&Default::default())));
         }
         let mesh = self.meshes.iter().find(|m| m.step == step).expect("made above");
         let depth = &self.depth.as_ref().expect("made above").2;
@@ -272,7 +355,12 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: c(sky[0]), g: c(sky[1]), b: c(sky[2]), a: 1.0 }),
+                        load: match area {
+                            Some(_) => wgpu::LoadOp::Load,
+                            None => {
+                                wgpu::LoadOp::Clear(wgpu::Color { r: c(sky[0]), g: c(sky[1]), b: c(sky[2]), a: 1.0 })
+                            }
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -285,6 +373,10 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if area.is_some() {
+                pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                pass.set_scissor_rect(0, 0, width, height);
+            }
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_pipeline(&self.terrain_pipeline);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -296,6 +388,13 @@ impl Renderer {
                 pass.set_vertex_buffer(1, instances.slice(..));
                 pass.set_index_buffer(self.cube.1.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..36, 0, 0..shapes.len() as u32);
+            }
+            self.models.draw(&mut pass);
+            if let Some(puffs) = self.puff_buffer.as_ref().filter(|_| !self.puffs.is_empty()) {
+                pass.set_pipeline(&self.puff_pipeline);
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                pass.set_vertex_buffer(0, puffs.slice(..));
+                pass.draw(0..6, 0..self.puffs.len() as u32);
             }
             if let Some(flats) = self.flats.as_ref().filter(|_| !self.overlay.is_empty()) {
                 pass.set_pipeline(&self.overlay_pipeline);
@@ -324,6 +423,27 @@ impl Renderer {
             }));
         }
         gpu.queue.write_buffer(self.instances.as_ref().expect("made above"), 0, &bytes);
+    }
+
+    /// Copy the effect blobs to the GPU, growing the buffer when it is too small.
+    fn upload_puffs(&mut self, gpu: &Gpu) {
+        let mut bytes = Vec::with_capacity(self.puffs.len() * PUFF as usize);
+        for p in &self.puffs {
+            for f in p.at.iter().chain([&p.radius]) {
+                bytes.extend_from_slice(&f.to_le_bytes());
+            }
+            bytes.extend_from_slice(&p.colour);
+            bytes.extend_from_slice(&[(p.glow.clamp(0.0, 1.0) * 255.0) as u8, 0, 0, 0]);
+        }
+        if self.puff_buffer.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
+            self.puff_buffer = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("effects"),
+                size: (bytes.len() as u64).next_power_of_two().max(4096),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        gpu.queue.write_buffer(self.puff_buffer.as_ref().expect("made above"), 0, &bytes);
     }
 
     /// Copy the overlay to the GPU in clip space for a `width` by `height` target.
@@ -363,61 +483,68 @@ impl Renderer {
         shapes: &[Shape],
         sky: [u8; 3],
     ) -> Vec<u8> {
-        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("image"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: OFFSCREEN_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (texture, view) = offscreen(gpu, (width, height));
         self.draw(gpu, &view, (width, height), world, camera, shapes, sky);
-        // Rows in a copy are padded to a multiple of 256 bytes.
-        let row = (width * 4).div_ceil(256) * 256;
-        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (row * height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("copy") });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(height),
-                },
-            },
-            size,
-        );
-        gpu.queue.submit([encoder.finish()]);
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("readback maps"));
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("GPU finishes");
-        let data = slice.get_mapped_range().expect("readback is mapped");
-        let mut out = Vec::with_capacity((width * height * 4) as usize);
-        for y in 0..height {
-            let start = (y * row) as usize;
-            out.extend_from_slice(&data[start..start + (width * 4) as usize]);
-        }
-        out
+        read_back(gpu, &texture)
     }
 }
 
+/// A new `width` by `height` image to draw into offscreen, in `OFFSCREEN_FORMAT`, and a view of it.
+pub fn offscreen(gpu: &Gpu, (width, height): (u32, u32)) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("image"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: OFFSCREEN_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+/// An offscreen image's RGBA pixels, rows top to bottom, once everything drawn into it has finished.
+pub fn read_back(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u8> {
+    let (width, height) = (texture.width(), texture.height());
+    // Rows in a copy are padded to a multiple of 256 bytes.
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (row * height) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("copy") });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+        },
+        texture.size(),
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |r| r.expect("readback maps"));
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("GPU finishes");
+    let data = slice.get_mapped_range().expect("readback is mapped");
+    let mut out = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        let start = (y * row) as usize;
+        out.extend_from_slice(&data[start..start + (width * 4) as usize]);
+    }
+    out
+}
+
 /// A buffer holding `bytes`.
-fn buffer(gpu: &Gpu, label: &str, bytes: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+pub(crate) fn buffer(gpu: &Gpu, label: &str, bytes: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
     let b = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         // Copies go in whole words.

@@ -53,6 +53,34 @@ fn the_opening_takes_the_home_spots_then_power_then_a_factory() {
 }
 
 #[test]
+fn builders_clear_a_wreck_off_a_home_spot_and_build_there() {
+    let mut world = skirmish(1, 2);
+    // An enemy extractor on one of player 0's home spots, shot down before the game starts, leaves a wreck there.
+    let home = skirmish::starts(2)[0];
+    let spot =
+        world.spots().iter().min_by_key(|s| (s.cx * SUB - home.0).abs() + (s.cy * SUB - home.1).abs()).unwrap().clone();
+    let enemy = world.spawn_for(1, EXTRACTOR, spot.cx * SUB + SUB / 2, spot.cy * SUB + SUB / 2);
+    let tank = world.spawn_for(0, TANK, spot.cx * SUB + SUB / 2, (spot.cy + 3) * SUB);
+    world.command(Command::Attack { unit: tank, target: enemy });
+    for _ in 0..400 {
+        world.step();
+    }
+    assert!(world.unit(enemy).is_none() && world.wrecks().len() == 1, "the extractor is a wreck");
+    assert!(world.is_blocked(spot.cx, spot.cy), "blocking the spot");
+
+    let wreck = world.wrecks()[0].id;
+    let mut ai = ais(&[0]);
+    // Clearing the spot comes first, before the builder starts on the rest of the base.
+    play(&mut world, &mut ai, 300);
+    assert!(world.wrecks().iter().all(|w| w.id != wreck), "a builder reclaimed it straight away");
+    play(&mut world, &mut ai, 2200);
+    let built = world.units().iter().any(|u| {
+        u.owner == 0 && u.kind == EXTRACTOR && u.build.is_none() && (u.pos.x / SUB, u.pos.y / SUB) == (spot.cx, spot.cy)
+    });
+    assert!(built, "and an extractor stands on the spot");
+}
+
+#[test]
 fn the_base_never_walls_itself_in() {
     let mut world = skirmish(2, 2);
     let mut ai = ais(&[0, 1]);
@@ -134,7 +162,7 @@ fn two_opponents_play_the_same_game_every_time() {
 }
 
 /// Two opponents on skirmish seed 7 after 4000 ticks.
-const GOLDEN: &str = "dbab117f";
+const GOLDEN: &str = "6c492ec4";
 
 #[test]
 fn the_command_log_replays_the_game_without_the_opponents() {

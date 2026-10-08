@@ -19,10 +19,14 @@ pub const EXTRACTOR: usize = 2;
 pub const FACTORY: usize = 3;
 pub const TANK: usize = 4;
 pub const ARTILLERY: usize = 5;
+/// Each kind's name, by index, for data that names kinds, such as which model draws each.
+pub const KINDS: [&str; 6] = ["builder", "generator", "extractor", "factory", "tank", "artillery"];
 
 /// Resources, by index into a store.
 pub const ORE: usize = 0;
 pub const POWER: usize = 1;
+/// Each resource's name, by index, for the panel's readout.
+pub const RESOURCES: [&str; 2] = ["ore", "power"];
 
 /// Map size in cells.
 pub const SIZE: i32 = 64;

@@ -32,13 +32,13 @@ units per side; measurements decide whether we go further.
 | `sim3d` | `replay`: seekable replays. Recording plays the game once and keeps a copy of the world every N ticks; seeking starts from the nearest copy and plays forward. The world a seek returns takes new commands (take over from replay), and its log is itself a replay. Snapshots live in memory for now. | Started |
 | `sim3d` | `economy` (docs/economy.md): a flow economy with resource kinds from data, a store per player with a capacity, units that produce every tick, and factories with queues that pay as they build. When spending outruns income, all of a player's factories slow down together. | Started |
 | `sim3d` | Construction in `world/construction.rs`: builders place frames beside a site once it is clear and build them through the economy, other builders assist, and structures' footprints block ground movement (not aircraft) until destroyed. | Started |
-| `sim3d` | Resource spots on the map that finished extractors yield, and wrecks that destroyed units leave and builders reclaim for their worth. | Started |
+| `sim3d` | Resource spots on the map that finished extractors yield, and wrecks that destroyed units leave and builders reclaim for their worth. A structure's wreck blocks its footprint until reclaimed; a unit's is driven over. | Started |
 | `ai3d` | The computer opponent (docs/ai.md): reads `&World`, gives orders only through `World::command`, and finds builders, factories, income and fighters from the unit data. Builders keep every resource coming in and add factories; factories build builders then fighters; fighters gather, defend and attack in growing waves. Also a generic skirmish (`ai3d::skirmish`) and the headless `selfplay` runner for balance runs. | Started |
 | `sim3d` | Intent orders in `world/intent.rs` (docs/intent.md): patrols that fight on the way and turn round, factories that keep a count of each unit type their owner wants, and units that fall back to a point when badly hurt. All are state, so they hash and replay like any order. | Started |
 | later: economy | Assisting factories, reclaiming frames, build priorities, rally points, upkeep. | Planned |
 | `view3d` | The renderer's groundwork, with no GPU code (docs/view.md): a strategic-zoom camera that tilts from an angled close view to straight down over the whole map and zooms at the cursor, the terrain mesh at full or coarser detail, and ground picking against the simulation's own heights. Floating point is fine here: it only reads the state. | Started |
-| `render3d` | The renderer (docs/render.md): the terrain and a box for every unit, frame, shot, wreck and spot, drawn with wgpu on `rts-platform` (the platform layer shared with the Classic engine, in the `rts-core` repository), sliding between ticks; tested offscreen. The `play3d` viewer lets you play a side of the generic skirmish with the mouse (select, move, attack, attack-move; a computer helper runs your base) or watch computer players, on the desktop or in the browser (WebGPU or WebGL2). | Started |
-| later: renderer | A HUD for building and production, models from the art studio, sound, effects from `events`. | Planned |
+| `render3d` | The renderer (docs/render.md): the terrain, the art studio's glTF models for units and frames (turned the way they move, turrets to their targets, painted in their owner's colour), wrecks as their burnt, flattened models, and a box for every shot and spot, drawn with wgpu on `rts-platform` (the platform layer shared with the Classic engine, in the `rts-core` repository), sliding between ticks; tested offscreen. The `play3d` viewer lets you play a side of the generic skirmish with the mouse (select, move, attack, attack-move, help build, reclaim) and a side panel (minimap, stock, build and production buttons, placing structures; a computer helper you can switch off runs your base), with flashes, fire, smoke and sound from the game's events, or watch computer players, on the desktop or in the browser (WebGPU or WebGL2). | Started |
+| later: renderer | Control groups and rally points, sounds and effects from a setting pack, music. | Planned |
 
 ## Roadmap
 
@@ -51,7 +51,8 @@ Agreed with Ed on 7 Oct 2026; the order can change as we learn.
 4. Intent orders: factory targets, fall-back rules, patrols that react (first version built: docs/intent.md).
 5. Renderer: wgpu with strategic zoom, on the platform layer shared with the Classic engine (window, input, GPU
    setup, textures, text, audio), now the `rts-platform` crate in the `rts-core` repository. Started: `view3d`
-   (camera, terrain mesh, picking) and `render3d` (drawing and a viewer).
+   (camera, terrain mesh, picking) and `render3d` (drawing the art studio's models, playing a side with the mouse
+   and a side panel for building and production, effects and sound, on the desktop and in the browser).
 6. Polish: turrets and facing, formations, a high-ground range bonus, craters, saving games to disk.
 
 ## Decisions so far

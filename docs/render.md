@@ -22,12 +22,55 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 5. **Tested offscreen.** `Renderer::draw_to_image` draws with no window on any adapter, a software one included.
    The tests check the map against the sky, each player's colour where their units are, that a ridge hides a unit
    behind it, and leave frames in `target/` to look at.
-6. **Playing goes through `control`, with no GPU.** Selecting and ordering are worked out from the world, the
+6. **Models stand in for boxes.** `model` reads the binary glTF files (`.glb`) the art studio's exporter writes
+   (rts-engine, `art/studio/export_gltf.py --lod low`) with a small reader of our own and `png` for the baked
+   textures. Each kind of the generic skirmish has one (`assets/skirmish/models/`, listed in `models.json` by kind
+   name with the source studio model). Every model is drawn at one size per metre (`metres_per_cell`, the studio's
+   10.67 metres to a tile), except that a building shrinks if it would not fit its footprint. A mobile unit faces the
+   way it last moved (the simulation keeps no facing, so `Shapes` works it out from its moves), and a turret turns
+   to its target. Team paint, baked grey, is multiplied by the owner's colour. A frame is the finished model, pale,
+   rising from the ground as it is built. A wreck is its unit's model, burnt dark and squashed to a third of its
+   height: a structure's over the footprint it still blocks, a mobile unit's as a low heap at its own angle, which
+   ground units ride up over rather than through. Kinds with no model, shots and resource spots stay boxes. Textures
+   get mipmaps so small far-off units don't shimmer. WebGL2 can't offset indices per draw, so each model's
+   indices count from the start of its own buffer.
+7. **Playing goes through `control`, with no GPU.** Selecting and ordering are worked out from the world, the
    camera and the shapes on screen, so they are tested without an adapter. The cursor's ray picks the nearest unit
    or frame box it enters, unless the ground (by `view3d::pick`, on the simulation's own heights) is nearer; a box
    selects every unit of yours whose middle projects inside it. Orders go in as ordinary commands in sub-cell
    units, so nothing new reaches replays or the state hash. A selected unit gets a pale plate under it, and the
-   drag box is flat rectangles drawn over the scene.
+   drag box is flat rectangles drawn over the scene. A click also selects one of your structures, but a box takes
+   only mobile units, and only mobile units take move and attack orders. Right-clicking a frame of yours sends the
+   selected builders to help build it, and a wreck, to reclaim it.
+8. **The panel sits beside the scene.** `panel` is a sidebar down the right, 260 pixels wide, drawn with the
+   sprite batch and pixel font from `rts-platform` first; the scene then fills the rest of the screen over it
+   (`Renderer::set_area`: a viewport, and the colour is loaded rather than cleared). Top to bottom: a minimap (the
+   ground shaded by height, spots, wrecks, every unit in its owner's colour, the camera's view as a dotted outline;
+   click or drag on it to look there), a line per resource with its store's fill and what it gained or lost a
+   second over the last two seconds (and a warning when spending outruns income), buttons for what the selection
+   can make, the helper's switch and the clock. A structure's button starts placing it: a green or red plate shows
+   where it would stand (`World::site_ok`), a click sends the nearest selected builder, shift places more, and a
+   right-click or Escape stops. A unit's button queues one in the selected factory with the shortest queue, shows
+   how many are queued and the first one's progress; a right-click empties those factories' queues. Factories and
+   builders you give orders to are yours, as in rule 7. The names on it come from the setting (`Names`); the
+   layout follows the classic 1990s sidebar. Like `control`, what a click does is worked out with no GPU.
+9. **Effects come from `events`.** `effects` turns each tick's events into soft round blobs that face the camera
+   (`Puff`), worked out with no GPU from the time since the event: a flash at the muzzle when a unit fires, a burst
+   of fire and dust where a shot lands (bigger for a shell with splash), a blast where a unit is destroyed (bigger
+   for a building), and smoke rising from every wreck, a vehicle's for 8 seconds and a building's for 30, with fire
+   at a building's foot for the first third; smoke stops when the wreck is cleared. The renderer draws them last,
+   tested against depth so hills and models hide them, without writing it; fire and flashes add light, smoke
+   covers what is behind it, farthest first. A building going up also shakes the view for under a second, most when
+   it is near the middle of the view (`shake`); only the picture moves, so clicks still land where they point.
+10. **Sound comes from `events` too.** `sound` makes its clips in code (generic placeholders until a setting pack
+   brings its own) and plays them through `rts-platform`'s mixer: a crack for a shot, a boom for a shell, a thud
+   where it lands, a blast when a unit is destroyed and a bigger one for a building with a deep rumble that rolls on
+   for a couple of seconds, and for your own side only, a
+   clunk when a frame is placed and a chime when something is finished. Battle sounds are loudest near the middle
+   of the view, fade over the ground it covers, are quieter off screen and when pulled right back, and pan to where
+   on screen they happen. The sound card (the `sound` feature, on by default) opens at the start on the desktop and
+   on the first click or key in the browser, which only allows sound after one; with no sound card the viewer is
+   silent. M mutes.
 
 ## The viewer
 
@@ -39,10 +82,13 @@ You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) agains
 a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
 to attack it or the ground to move there, with Ctrl held to attack-move. A computer helper (an ordinary `ai3d`
 player) runs your base and factories and sends waves with the fighters you leave to it; once you give a unit an
-order it is yours alone, and the helper's orders for it are dropped. That lets you play before there is a HUD for
-building, an idea we take from Supreme Commander's and Total Annihilation's automation of the chores. `--watch 1`
-(`?watch=1` in the browser) leaves every side to the computer. The wheel zooms at the cursor, arrow keys or WASD
-pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape quits.
+order it is yours alone, and the helper's orders for it are dropped, an idea we take from Supreme Commander's and
+Total Annihilation's automation of the chores. The panel on the right (rule 8) builds and produces; its switch
+turns the helper off, so the whole side is yours, and `--helper 0` (`?helper=0`) starts with it off. `--watch 1`
+(`?watch=1` in the browser) leaves every side to the computer, and `--boxes 1` draws boxes in place of the models.
+The wheel zooms at the cursor, arrow keys or WASD
+pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape stops
+placing a structure, or else quits. M mutes the sound.
 The game runs at 30 ticks a second of game time; that rate is the viewer's choice, since the simulation has no
 clock.
 
@@ -57,13 +103,15 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 
 `wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
-Space pauses, a drag selects, a right-click opens no browser menu and the wheel zooms.
+Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
+Escape stops it, the helper's switch turns it off, M mutes, and the wheel zooms.
 
 ## Later
 
-- Building and production from a HUD, so the helper can be switched off; double-click to select every unit of a
-  kind on screen; control groups.
-- Models from the art studio's glTF exports in place of boxes, with icons when zoomed far out.
-- A HUD with the sprite batcher and font from `rts-platform`, and sound from its mixer.
-- Effects from `events`: muzzle flashes, impacts, wrecks burning.
+- Double-click to select every unit of a kind on screen; control groups; rally points for factories.
+- Icons when zoomed far out; the detailed models close in.
+- Models for other settings, read from a setting pack instead of built into the program.
+- Sounds and effects from a setting pack instead of made in code; music.
+- Real projectiles in place of the small boxes that stand in for shots today: a tracer for a gun, a shell with a
+  smoke trail for artillery (Ed, 8 Oct 2026: fine as placeholders, not for the real thing).
 - Units tilted to the slope they stand on; today a level box sinks into a hillside.

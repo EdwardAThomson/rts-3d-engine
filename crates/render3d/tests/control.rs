@@ -195,3 +195,68 @@ fn the_drag_outline_is_four_edges_round_a_faint_fill() {
     assert!(rects[1..].iter().all(|r| r.colour[3] == 255));
     assert!(rects.iter().all(|r| r.min[0] >= 10.0 && r.max[0] <= 110.0 && r.min[1] >= 20.0 && r.max[1] <= 70.0));
 }
+
+#[test]
+fn right_clicking_a_frame_of_yours_sends_the_builders_to_help_and_a_wreck_to_reclaim_it() {
+    let mut world = World::new(Heightmap::flat(24, 24, 0), skirmish::types(), 1);
+    world.set_store(0, vec![1_000_000; 2], vec![1_000_000; 2]);
+    let [first, second] = [6, 7].map(|x| world.spawn(BUILDER, x * SUB, 6 * SUB));
+    let tank = world.spawn(TANK, 8 * SUB, 7 * SUB);
+    world.command(Command::Build { unit: first, kind: skirmish::GENERATOR, cx: 10, cy: 10 });
+    let frame = (0..600)
+        .find_map(|_| {
+            world.step().into_iter().find_map(|e| match e {
+                sim3d::world::Event::Placed { unit, .. } => Some(unit),
+                _ => None,
+            })
+        })
+        .expect("the frame is placed");
+    let camera = close(&world, 11.0, 11.0);
+    let shapes = Shapes::default().shapes(&world, 1.0);
+    let mut control = Control::new(0);
+    control.selected.extend([second, tank]);
+    let at = on_screen(&world, &camera, frame);
+    // The builder helps; the tank has nothing to do there and stays put.
+    assert_eq!(
+        control.order(&world, &camera, &shapes, at, SCREEN, false),
+        [Command::Assist { unit: second, target: frame }]
+    );
+    assert!(control.claimed.contains(&second) && !control.claimed.contains(&tank));
+
+    // An enemy tank's wreck, beside our builders: right-clicking it reclaims it.
+    let enemy = world.spawn_for(1, TANK, 13 * SUB, 7 * SUB);
+    world.command(Command::Attack { unit: tank, target: enemy });
+    let wreck = (0..2000)
+        .find_map(|_| {
+            world.step().into_iter().find_map(|e| match e {
+                sim3d::world::Event::Wrecked { unit, wreck } if unit == enemy => Some(wreck),
+                _ => None,
+            })
+        })
+        .expect("the enemy tank is wrecked");
+    let shapes = Shapes::default().shapes(&world, 1.0);
+    let heap = shapes.iter().find(|s| s.part == Part::Wreck(wreck)).expect("the wreck is drawn");
+    let centre = [(heap.min[0] + heap.max[0]) / 2.0, (heap.min[1] + heap.max[1]) / 2.0, heap.max[2]];
+    let at = camera.project(world.map(), centre, SCREEN.width, SCREEN.height).unwrap();
+    assert_eq!(control.order(&world, &camera, &shapes, at, SCREEN, false), [Command::Reclaim { unit: second, wreck }]);
+}
+
+#[test]
+fn a_click_selects_a_structure_of_yours_but_a_box_takes_only_units() {
+    let mut world = World::new(Heightmap::flat(24, 24, 0), skirmish::types(), 1);
+    let factory = world.spawn(FACTORY, 10 * SUB, 10 * SUB);
+    let tank = world.spawn(TANK, 14 * SUB, 10 * SUB);
+    let camera = close(&world, 12.0, 10.0);
+    let mut control = Control::new(0);
+    click(&mut control, &world, &camera, on_screen(&world, &camera, factory), false);
+    assert_eq!(control.selected.iter().copied().collect::<Vec<_>>(), [factory]);
+    let shapes = Shapes::default().shapes(&world, 1.0);
+    control.press(0.0, 0.0);
+    control.release(&world, &camera, &shapes, (SCREEN.width, SCREEN.height), SCREEN, false);
+    assert_eq!(control.selected.iter().copied().collect::<Vec<_>>(), [tank]);
+    // A selected structure takes no move order.
+    control.selected.insert(factory);
+    let ground = camera.project(world.map(), [12.0, 14.0, 0.0], SCREEN.width, SCREEN.height).unwrap();
+    let orders = control.order(&world, &camera, &shapes, ground, SCREEN, false);
+    assert!(matches!(orders[..], [Command::Move { unit, .. }] if unit == tank));
+}
