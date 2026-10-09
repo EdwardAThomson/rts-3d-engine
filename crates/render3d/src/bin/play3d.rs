@@ -5,8 +5,8 @@
 //! The same program runs in the browser (`web/play3d/`, see docs/render.md), drawing with WebGPU or WebGL2 into the
 //! page's canvas, with the options in the page address instead: `?seed=3&players=4&speed=8`.
 //!
-//! It opens on a start menu in the panel's place (see `menu`): the map's seed, the number of players, the helper and
-//! watching only, with the map those options make turning beside it; Start or Enter begins. The options given on the
+//! It opens on a title menu, centred on the screen (see `menu`): the map those options make turning in a window, and
+//! buttons for the map's seed, the number of players, the helper and watching only; Start or Enter begins. The options given on the
 //! command line or in the address fill the menu, and `--menu 0` skips it and starts straight away. When one side is
 //! left the panel shows who won, how long it took and what each side built and lost, with buttons (or Enter) to
 //! play the same game again or go back to the menu.
@@ -68,10 +68,10 @@ const SPEEDS: [u32; 6] = [1, 2, 4, 8, 16, 32];
 const SKY: [u8; 3] = [20, 24, 32];
 /// Two clicks, or two presses of a group's number, this close together are a double.
 const DOUBLE: Duration = Duration::from_millis(400);
-/// Radians a second the map beside the start menu turns.
+/// Radians a second the map in the title menu's window turns.
 const SHOWCASE_TURN: f32 = 0.12;
-/// How far in the map beside the start menu is seen, as the camera's zoom.
-const SHOWCASE_ZOOM: f32 = 0.75;
+/// How far in the map in the title menu's window is seen, as the camera's zoom.
+const SHOWCASE_ZOOM: f32 = 0.9;
 /// Share of the screen panned per second, and radians turned per second.
 const PAN: f32 = 0.8;
 const TURN: f32 = 1.6;
@@ -109,7 +109,7 @@ struct Running {
 }
 
 struct App {
-    /// On the start menu, with the world the menu's options make shown beside it, rather than playing.
+    /// On the title menu, with the world the menu's options make shown in its window, rather than playing.
     in_menu: bool,
     menu: Menu,
     /// The options the game being played was started with, for playing it again.
@@ -234,7 +234,7 @@ impl App {
         (self.last_click, self.last_group) = (None, None);
     }
 
-    /// Back to the start menu, showing the map its options make.
+    /// Back to the title menu, showing the map its options make.
     fn back_to_menu(&mut self) {
         self.in_menu = true;
         self.control = None;
@@ -242,7 +242,7 @@ impl App {
         self.showcase();
     }
 
-    /// The map the menu's options make, to show beside the menu, unless it is already the one shown.
+    /// The map the menu's options make, to show in the menu's window, unless it is already the one shown.
     fn showcase(&mut self) {
         let Options { seed, players, .. } = self.menu.options;
         if self.showing != Some((seed, players)) {
@@ -463,7 +463,13 @@ impl App {
             seen.focus[0] += shake * (now * 2.1).sin();
             seen.focus[1] += shake * (now * 2.9 + 1.0).cos();
         }
-        run.renderer.set_area(Some((scene.width as u32, scene.height as u32)));
+        if self.in_menu {
+            // The map turns in the title menu's window.
+            let p = menu::title_layout(screen).preview;
+            run.renderer.set_area_at(Some([p.x as u32, p.y as u32, p.w as u32, p.h as u32]));
+        } else {
+            run.renderer.set_area(Some((scene.width as u32, scene.height as u32)));
+        }
         let texture = match run.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -475,7 +481,7 @@ impl App {
         let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let size = (run.config.width, run.config.height);
         // The panel first, over the sky, then the scene beside it.
-        // The menu, the game-over panel or the panel, in the same place down the right.
+        // The title menu over the whole screen, or the game-over panel or the panel down the right.
         if self.in_menu {
             self.menu.draw(&mut run.batch, &run.font, screen);
         } else if let Some(headline) = headline {

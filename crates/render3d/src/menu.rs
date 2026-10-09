@@ -1,9 +1,10 @@
-//! The start menu and the game-over panel, both in the panel's place down the right of the screen, beside the map.
+//! The title menu and the game-over panel.
 //!
-//! The start menu sets up a game: the map's seed, how many players, whether the computer helper runs your base, and
-//! whether you play at all or only watch. The scene beside it shows the map those options make, turning slowly, so
-//! a seed can be picked by eye. When one side is left the game-over panel takes the panel's place: who won, how long
-//! it took, what each side built and lost, and buttons to play the same game again or go back to the menu.
+//! The title menu fills the screen, centred: the title, a window onto the map the options make, turning slowly so a
+//! seed can be picked by eye, and buttons for the map's seed, how many players, whether the computer helper runs
+//! your base, and whether you play at all or only watch, then Start. When one side is left the game-over panel takes
+//! the side panel's place beside the battlefield: who won, how long it took, what each side built and lost, and
+//! buttons to play the same game again or go back to the title menu.
 //!
 //! Clicks are worked out with no GPU, so they are tested on their own, and the tally reads only the world's events.
 
@@ -41,7 +42,7 @@ impl Default for Options {
     }
 }
 
-/// A line of the start menu.
+/// A line of the title menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
     Seed,
@@ -60,19 +61,65 @@ pub enum Pressed {
     Start,
     /// Play the game just finished again, with the same options.
     Again,
-    /// Go back to the start menu.
+    /// Go back to the title menu.
     Menu,
 }
 
-/// The start menu's state.
+/// The title menu's state.
 #[derive(Clone, Debug, Default)]
 pub struct Menu {
     pub options: Options,
 }
 
-const ROWS: [Row; 5] = [Row::Seed, Row::Players, Row::Helper, Row::Watch, Row::Start];
-/// Where the menu's rows and the game-over panel's buttons start, below the title.
+/// Where the game-over panel's lines start, below its headline.
 const TOP: f32 = 64.0;
+/// The title menu's widest column, in pixels.
+const COLUMN: f32 = 560.0;
+/// The night sky behind the map in the title menu's window, as in the game.
+const SKY: [u8; 4] = [20, 24, 32, 255];
+/// The title's font scale.
+const TITLE: f32 = 6.0;
+
+/// Where everything on the title menu goes, centred on a screen of a given size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TitleLayout {
+    /// The top of the title, centred.
+    pub title: f32,
+    /// The window the map is drawn in.
+    pub preview: Px,
+    /// Each row's button: the four options two by two, then Start across the column.
+    pub rows: Vec<(Row, Px)>,
+    /// The top of the help line under Start.
+    pub help: f32,
+}
+
+/// The title menu's layout: a column centred across the screen, the title at the top, the map's window taking what
+/// height is left after the buttons.
+pub fn title_layout(screen: Screen) -> TitleLayout {
+    let w = COLUMN.min(screen.width - 2.0 * PAD).max(1.0);
+    let x = (screen.width - w) / 2.0;
+    let title = (screen.height * 0.05).max(PAD);
+    let under = title + Font::height(TITLE) + GAP + Font::height(BIG) + 2.0 * GAP;
+    let buttons = 2.0 * (BUTTON_H + GAP) + 2.0 * GAP + BUTTON_H + 2.0 * GAP + Font::height(SMALL) + PAD;
+    let preview_h = (screen.height - under - buttons - 2.0 * GAP).max(BUTTON_H);
+    let preview = Px::new(x, under, w, preview_h);
+    let top = preview.y + preview.h + 2.0 * GAP;
+    let half = (w - GAP) / 2.0;
+    let at = |col: f32, row: f32| Px::new(x + col * (half + GAP), top + row * (BUTTON_H + GAP), half, BUTTON_H);
+    let start = Px::new(x, top + 2.0 * (BUTTON_H + GAP) + 2.0 * GAP, w, BUTTON_H);
+    TitleLayout {
+        title,
+        preview,
+        rows: vec![
+            (Row::Seed, at(0.0, 0.0)),
+            (Row::Players, at(1.0, 0.0)),
+            (Row::Helper, at(0.0, 1.0)),
+            (Row::Watch, at(1.0, 1.0)),
+            (Row::Start, start),
+        ],
+        help: start.y + start.h + 2.0 * GAP,
+    }
+}
 
 impl Menu {
     pub fn new(options: Options) -> Menu {
@@ -81,16 +128,7 @@ impl Menu {
 
     /// Each row's button on a screen of this size.
     pub fn rows(screen: Screen) -> Vec<(Row, Px)> {
-        let panel = layout(screen, 0).panel;
-        let w = WIDTH - 2.0 * PAD;
-        ROWS.iter()
-            .enumerate()
-            .map(|(i, &row)| {
-                // A gap above Start sets it apart from the options.
-                let extra = if row == Row::Start { 2.0 * GAP } else { 0.0 };
-                (row, Px::new(panel.x + PAD, TOP + i as f32 * (BUTTON_H + GAP) + extra, w, BUTTON_H))
-            })
-            .collect()
+        title_layout(screen).rows
     }
 
     /// A click at `at`: on an option, step it on (or back, with `right`); on Start, start.
@@ -126,19 +164,24 @@ impl Menu {
         }
     }
 
-    /// The menu in the panel's place.
+    /// The title menu over the whole screen, with a frame round the map's window; the scene is drawn into the
+    /// window afterwards (`Renderer::set_area_at`).
     pub fn draw(&self, batch: &mut SpriteBatch, font: &Font, screen: Screen) {
-        let panel = backdrop(batch, screen);
-        title(batch, font, panel, "3D RTS", "SKIRMISH");
-        for (row, r) in Self::rows(screen) {
-            let start = row == Row::Start;
-            button(batch, font, r, &self.label(row), if start { PICKED } else { BUTTON });
+        let l = title_layout(screen);
+        batch.fill(Px::new(0.0, 0.0, screen.width, screen.height), BACK);
+        let centred = |text: &str, scale: f32| (screen.width - Font::width(text, scale)) / 2.0;
+        font.draw(batch, "3D RTS", centred("3D RTS", TITLE), l.title, TITLE, BAR);
+        let y = l.title + Font::height(TITLE) + GAP;
+        font.draw(batch, "SKIRMISH", centred("SKIRMISH", BIG), y, BIG, INK);
+        let p = l.preview;
+        batch.fill(p, SKY);
+        batch.outline(Px::new(p.x - 2.0, p.y - 2.0, p.w + 4.0, p.h + 4.0), 2.0, EDGE);
+        for (row, r) in &l.rows {
+            let start = *row == Row::Start;
+            button(batch, font, *r, &self.label(*row), if start { PICKED } else { BUTTON });
         }
-        let help = ["CLICK TO CHANGE,", "RIGHT-CLICK TO STEP BACK.", "ENTER STARTS."];
-        let y = Self::rows(screen).last().map_or(TOP, |(_, r)| r.y + r.h + 2.0 * PAD);
-        for (i, line) in help.iter().enumerate() {
-            font.draw(batch, line, panel.x + PAD, y + i as f32 * (Font::height(SMALL) + 4.0), SMALL, DIM);
-        }
+        let help = "CLICK TO CHANGE, RIGHT-CLICK TO STEP BACK, ENTER TO START";
+        font.draw(batch, help, centred(help, SMALL), l.help, SMALL, DIM);
     }
 }
 

@@ -167,13 +167,13 @@ for (const run of runs) {
   await page.waitForTimeout(300);
   const zoomed = await frame(page, run);
   if (zoomed.png) writeFileSync(`${out}/play3d-${run.name}-zoomed.png`, zoomed.png);
-  // Without menu=0 the page opens on the start menu: the players' row steps on and Start begins the game.
+  // Without menu=0 the page opens on the title menu: the players' button steps on and Start begins the game.
   await page.goto(`${base}/web/play3d/?seed=2`);
   const menu = await titled(/menu, seed 2, 2 players/);
   await page.locator("#game").focus();
-  await page.mouse.click(830, 130);
+  await page.mouse.click(621, 449);
   const stepped = await titled(/menu, seed 2, 3 players/);
-  await page.mouse.click(830, 280);
+  await page.mouse.click(480, 553);
   const started = await titled(/tick ([1-9]\d)/);
   const checks = {
     [`drew with ${run.backend}`]: drawing.includes(`(${run.backend},`),

@@ -1,5 +1,5 @@
-//! The start menu and the game-over panel: what clicks change, the tally of what each side built and lost, and
-//! both drawn beside the scene.
+//! The title menu and the game-over panel: where the title menu's parts go, what clicks change, the tally of what
+//! each side built and lost, and both drawn with the scene.
 
 use ai3d::skirmish::{self, TANK};
 use render3d::control::Screen;
@@ -26,18 +26,24 @@ fn row(r: Row) -> (f32, f32) {
 }
 
 #[test]
-fn the_menus_rows_sit_in_the_panels_place_one_under_another() {
+fn the_title_menu_is_centred_with_the_map_above_the_buttons() {
     let panel = layout(SCREEN, 0).panel;
-    let rows = Menu::rows(SCREEN);
-    assert_eq!(
-        rows.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
-        [Row::Seed, Row::Players, Row::Helper, Row::Watch, Row::Start]
-    );
-    for pair in rows.windows(2) {
-        assert!(pair[0].1.y + pair[0].1.h < pair[1].1.y, "{pair:?}");
-    }
-    for (_, r) in &rows {
-        assert!(r.x >= panel.x && r.x + r.w <= panel.x + panel.w && r.y + r.h <= SCREEN.height);
+    for screen in [SCREEN, Screen { width: 1280.0, height: 800.0 }, Screen { width: 640.0, height: 480.0 }] {
+        let l = menu::title_layout(screen);
+        let middle = |r: Px| r.x + r.w / 2.0;
+        assert!((middle(l.preview) - screen.width / 2.0).abs() < 1.0, "the map's window is centred");
+        assert!(l.preview.h >= 100.0, "and has room: {:?}", l.preview);
+        let rows = &l.rows;
+        assert_eq!(
+            rows.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+            [Row::Seed, Row::Players, Row::Helper, Row::Watch, Row::Start]
+        );
+        // Two by two under the window, then Start under them, across the same column.
+        let r = |row: usize| rows[row].1;
+        assert!(r(0).y > l.preview.y + l.preview.h && r(0).y == r(1).y && r(1).x > r(0).x + r(0).w);
+        assert!(r(2).y > r(0).y + r(0).h && r(4).y > r(2).y + r(2).h);
+        assert!((middle(r(4)) - screen.width / 2.0).abs() < 1.0 && r(4).w == l.preview.w);
+        assert!(l.help + 8.0 <= screen.height, "everything fits on {screen:?}");
     }
     for (_, r) in menu::over_buttons(SCREEN) {
         assert!(r.x >= panel.x && r.y + r.h <= SCREEN.height);
@@ -102,12 +108,15 @@ fn the_tally_counts_what_each_side_built_and_lost() {
 }
 
 #[test]
-fn the_menu_and_the_game_over_panel_draw_beside_the_scene() {
+fn the_title_menu_and_the_game_over_panel_draw_with_the_scene() {
     let gpu = Gpu::headless().expect("a GPU adapter (a software one will do)");
     let (w, h) = (SCREEN.width as u32, SCREEN.height as u32);
     let world = skirmish::skirmish(1, 2);
     let scene = layout(SCREEN, 0).scene;
-    let camera = Camera::new(world.map());
+    // Seen at a slant, as the title menu shows it.
+    let mut camera = Camera::new(world.map());
+    camera.zoom = 0.9;
+    camera.settle(world.map());
     let mut renderer = Renderer::new(&gpu, OFFSCREEN_FORMAT);
     let mut batch = SpriteBatch::new(&gpu, OFFSCREEN_FORMAT);
     let font = Font::new(&gpu, &mut batch);
@@ -124,7 +133,13 @@ fn the_menu_and_the_game_over_panel_draw_beside_the_scene() {
             Menu::default().draw(&mut batch, &font, SCREEN);
         }
         batch.draw(&gpu, &view, w, h, [20, 24, 32, 255]);
-        renderer.set_area(Some((scene.width as u32, scene.height as u32)));
+        let p = menu::title_layout(SCREEN).preview;
+        let area = if over {
+            [0, 0, scene.width as u32, scene.height as u32]
+        } else {
+            [p.x as u32, p.y as u32, p.w as u32, p.h as u32]
+        };
+        renderer.set_area_at(Some(area));
         renderer.draw(&gpu, &view, (w, h), &world, &camera, &shapes, [20, 24, 32]);
         let image = render3d::renderer::read_back(&gpu, &texture);
         let _ = std::fs::create_dir_all("../../target");
@@ -134,7 +149,13 @@ fn the_menu_and_the_game_over_panel_draw_beside_the_scene() {
             let i = ((y as u32) * w + x as u32) as usize * 4;
             [image[i], image[i + 1], image[i + 2]]
         };
-        assert_ne!(pixel((scene.width / 2.0, scene.height / 2.0)), [20, 24, 32], "{name}: the map beside it");
+        let map = (area[0] as f32 + area[2] as f32 / 2.0, area[1] as f32 + area[3] as f32 / 2.0);
+        assert_ne!(pixel(map), [20, 24, 32], "{name}: the map in its place");
+        assert_ne!(pixel(map), [30, 32, 38], "{name}: not covered by the menu's background");
+        if !over {
+            // Outside the window, the menu's own background: the scene keeps to its window.
+            assert_eq!(pixel((p.x - 20.0, p.y + p.h / 2.0)), [30, 32, 38], "{name}: left of the window");
+        }
         // The first button in the picked colour at its corner, with its label written across it.
         let first = if over { menu::over_buttons(SCREEN)[0].1 } else { Menu::rows(SCREEN)[4].1 };
         assert_eq!(pixel((first.x + 3.0, first.y + 3.0)), [70, 96, 140], "{name}: the main button");
