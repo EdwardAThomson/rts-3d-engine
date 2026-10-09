@@ -167,13 +167,16 @@ for (const run of runs) {
   await page.waitForTimeout(300);
   const zoomed = await frame(page, run);
   if (zoomed.png) writeFileSync(`${out}/play3d-${run.name}-zoomed.png`, zoomed.png);
-  // Without menu=0 the page opens on the title menu: the players' button steps on and Start begins the game.
+  // Without menu=0 the page opens on the main menu. Skirmish opens the setup, the players' button steps on and Start
+  // begins the game.
   await page.goto(`${base}/web/play3d/?seed=2`);
-  const menu = await titled(/menu, seed 2, 2 players/);
+  const menu = await titled(/main menu/);
   await page.locator("#game").focus();
+  await page.mouse.click(480, 238);
+  const setup = await titled(/skirmish setup, seed 2, 2 players/);
   await page.mouse.click(621, 449);
-  const stepped = await titled(/menu, seed 2, 3 players/);
-  await page.mouse.click(480, 553);
+  const stepped = await titled(/skirmish setup, seed 2, 3 players/);
+  await page.mouse.click(621, 553);
   const started = await titled(/tick ([1-9]\d)/);
   const checks = {
     [`drew with ${run.backend}`]: drawing.includes(`(${run.backend},`),
@@ -187,8 +190,9 @@ for (const run of runs) {
     "the panel turns the helper off": helperOff,
     "M mutes": muted,
     "a control group comes back": recalled,
-    "the page opens on the menu": menu,
-    "a menu row steps on": stepped,
+    "the page opens on the main menu": menu,
+    "Skirmish opens the setup": setup,
+    "a setup button steps on": stepped,
     "Start begins the game": started,
     "the wheel zooms": zoomed.colours >= 64 && zoomed.print !== shot.print,
     "no errors": errors.length === 0,

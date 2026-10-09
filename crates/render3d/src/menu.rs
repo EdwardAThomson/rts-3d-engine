@@ -1,10 +1,12 @@
-//! The title menu and the game-over panel.
+//! The game's menus and the game-over panel.
 //!
-//! The title menu fills the screen, centred: the title, a window onto the map the options make, turning slowly so a
+//! The main menu comes first, as in any strategy game: the title and a column of choices, Skirmish, Campaign, Load
+//! game and (on the desktop) Quit. Campaign and Load game are shown but not offered yet: the engine has neither.
+//! Skirmish leads to the skirmish setup, centred too: a window onto the map the options make, turning slowly so a
 //! seed can be picked by eye, and buttons for the map's seed, how many players, whether the computer helper runs
-//! your base, and whether you play at all or only watch, then Start. When one side is left the game-over panel takes
+//! your base, and whether you play at all or only watch, then Back and Start. When one side is left the game-over panel takes
 //! the side panel's place beside the battlefield: who won, how long it took, what each side built and lost, and
-//! buttons to play the same game again or go back to the title menu.
+//! buttons to play the same game again or go back to the main menu.
 //!
 //! Clicks are worked out with no GPU, so they are tested on their own, and the tally reads only the world's events.
 
@@ -42,13 +44,47 @@ impl Default for Options {
     }
 }
 
-/// A line of the title menu.
+/// Which of the menus is showing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Page {
+    #[default]
+    Main,
+    Skirmish,
+}
+
+/// A choice on the main menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    Skirmish,
+    Campaign,
+    Load,
+    Quit,
+}
+
+impl Entry {
+    /// Whether the engine can do it yet. Campaigns and saved games are still to come.
+    pub fn ready(self) -> bool {
+        !matches!(self, Entry::Campaign | Entry::Load)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Entry::Skirmish => "SKIRMISH",
+            Entry::Campaign => "CAMPAIGN",
+            Entry::Load => "LOAD GAME",
+            Entry::Quit => "QUIT",
+        }
+    }
+}
+
+/// A button of the skirmish setup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
     Seed,
     Players,
     Helper,
     Watch,
+    Back,
     Start,
 }
 
@@ -61,39 +97,69 @@ pub enum Pressed {
     Start,
     /// Play the game just finished again, with the same options.
     Again,
-    /// Go back to the title menu.
+    /// Go back to the main menu.
     Menu,
+    /// Leave the program.
+    Quit,
 }
 
-/// The title menu's state.
+/// The menus' state.
 #[derive(Clone, Debug, Default)]
 pub struct Menu {
+    pub page: Page,
     pub options: Options,
+    /// Whether the main menu offers Quit: on the desktop, not in a browser tab.
+    pub quit: bool,
 }
 
 /// Where the game-over panel's lines start, below its headline.
 const TOP: f32 = 64.0;
-/// The title menu's widest column, in pixels.
+/// The skirmish setup's widest column, in pixels.
 const COLUMN: f32 = 560.0;
-/// The night sky behind the map in the title menu's window, as in the game.
+/// The night sky behind the map in the skirmish setup's window, as in the game.
 const SKY: [u8; 4] = [20, 24, 32, 255];
 /// The title's font scale.
 const TITLE: f32 = 6.0;
 
-/// Where everything on the title menu goes, centred on a screen of a given size.
+/// The main menu's buttons' width.
+const MAIN_W: f32 = 320.0;
+
+/// Where the main menu's choices go: a column centred on the screen, under the title. `quit` adds Quit at the foot.
+pub fn main_layout(screen: Screen, quit: bool) -> Vec<(Entry, Px)> {
+    let w = MAIN_W.min(screen.width - 2.0 * PAD).max(1.0);
+    let x = (screen.width - w) / 2.0;
+    let top = main_title(screen) + Font::height(TITLE) + GAP + Font::height(BIG) + 6.0 * GAP;
+    let entries: &[Entry] = if quit {
+        &[Entry::Skirmish, Entry::Campaign, Entry::Load, Entry::Quit]
+    } else {
+        &[Entry::Skirmish, Entry::Campaign, Entry::Load]
+    };
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, &e)| (e, Px::new(x, top + i as f32 * (BUTTON_H + 2.0 * GAP), w, BUTTON_H)))
+        .collect()
+}
+
+/// The top of the main menu's title: a fifth of the way down.
+fn main_title(screen: Screen) -> f32 {
+    (screen.height * 0.2).max(PAD)
+}
+
+/// Where everything on the skirmish setup goes, centred on a screen of a given size.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TitleLayout {
     /// The top of the title, centred.
     pub title: f32,
     /// The window the map is drawn in.
     pub preview: Px,
-    /// Each row's button: the four options two by two, then Start across the column.
+    /// Each row's button: the four options two by two, then Back and Start.
     pub rows: Vec<(Row, Px)>,
     /// The top of the help line under Start.
     pub help: f32,
 }
 
-/// The title menu's layout: a column centred across the screen, the title at the top, the map's window taking what
+/// The skirmish setup's layout: a column centred across the screen, the title at the top, the map's window taking what
 /// height is left after the buttons.
 pub fn title_layout(screen: Screen) -> TitleLayout {
     let w = COLUMN.min(screen.width - 2.0 * PAD).max(1.0);
@@ -106,7 +172,9 @@ pub fn title_layout(screen: Screen) -> TitleLayout {
     let top = preview.y + preview.h + 2.0 * GAP;
     let half = (w - GAP) / 2.0;
     let at = |col: f32, row: f32| Px::new(x + col * (half + GAP), top + row * (BUTTON_H + GAP), half, BUTTON_H);
-    let start = Px::new(x, top + 2.0 * (BUTTON_H + GAP) + 2.0 * GAP, w, BUTTON_H);
+    let last = top + 2.0 * (BUTTON_H + GAP) + 2.0 * GAP;
+    let back = Px::new(x, last, half, BUTTON_H);
+    let start = Px::new(x + half + GAP, last, half, BUTTON_H);
     TitleLayout {
         title,
         preview,
@@ -115,6 +183,7 @@ pub fn title_layout(screen: Screen) -> TitleLayout {
             (Row::Players, at(1.0, 0.0)),
             (Row::Helper, at(0.0, 1.0)),
             (Row::Watch, at(1.0, 1.0)),
+            (Row::Back, back),
             (Row::Start, start),
         ],
         help: start.y + start.h + 2.0 * GAP,
@@ -122,17 +191,35 @@ pub fn title_layout(screen: Screen) -> TitleLayout {
 }
 
 impl Menu {
-    pub fn new(options: Options) -> Menu {
-        Menu { options }
+    /// The menus, on the main menu, offering Quit when `quit`.
+    pub fn new(options: Options, quit: bool) -> Menu {
+        Menu { page: Page::Main, options, quit }
     }
 
-    /// Each row's button on a screen of this size.
+    /// Each row's button of the skirmish setup on a screen of this size.
     pub fn rows(screen: Screen) -> Vec<(Row, Px)> {
         title_layout(screen).rows
     }
 
-    /// A click at `at`: on an option, step it on (or back, with `right`); on Start, start.
+    /// The main menu's choices on a screen of this size.
+    pub fn entries(&self, screen: Screen) -> Vec<(Entry, Px)> {
+        main_layout(screen, self.quit)
+    }
+
+    /// A click at `at`. On the main menu: Skirmish opens the setup, Quit quits, and choices not ready do nothing. On
+    /// the setup: an option steps on (or back, with `right`), Back goes back to the main menu and Start starts.
     pub fn click(&mut self, at: (f32, f32), screen: Screen, right: bool) -> Pressed {
+        if self.page == Page::Main {
+            let entry = self.entries(screen).into_iter().find(|(_, r)| r.contains(at.0, at.1)).map(|(e, _)| e);
+            return match entry {
+                Some(Entry::Skirmish) => {
+                    self.page = Page::Skirmish;
+                    Pressed::Nothing
+                }
+                Some(Entry::Quit) => Pressed::Quit,
+                _ => Pressed::Nothing,
+            };
+        }
         let Some((row, _)) = Self::rows(screen).into_iter().find(|(_, r)| r.contains(at.0, at.1)) else {
             return Pressed::Nothing;
         };
@@ -146,9 +233,26 @@ impl Menu {
             }
             Row::Helper => o.helper = !o.helper,
             Row::Watch => o.watch = !o.watch,
+            Row::Back => self.page = Page::Main,
             Row::Start => return Pressed::Start,
         }
         Pressed::Nothing
+    }
+
+    /// Enter: on the main menu, open the skirmish setup; on the setup, start.
+    pub fn enter(&mut self) -> Pressed {
+        match self.page {
+            Page::Main => {
+                self.page = Page::Skirmish;
+                Pressed::Nothing
+            }
+            Page::Skirmish => Pressed::Start,
+        }
+    }
+
+    /// Escape: back from the skirmish setup to the main menu. Returns whether it went back.
+    pub fn back(&mut self) -> bool {
+        std::mem::replace(&mut self.page, Page::Main) == Page::Skirmish
     }
 
     /// What a row says.
@@ -160,19 +264,40 @@ impl Menu {
             Row::Players => format!("PLAYERS {}", o.players),
             Row::Helper => format!("HELPER {}", on(o.helper)),
             Row::Watch => format!("WATCH ONLY {}", on(o.watch)),
+            Row::Back => "BACK".into(),
             Row::Start => "START".into(),
         }
     }
 
-    /// The title menu over the whole screen, with a frame round the map's window; the scene is drawn into the
-    /// window afterwards (`Renderer::set_area_at`).
+    /// The page showing, over the whole screen. On the skirmish setup the map's window gets a frame, and the scene
+    /// is drawn into it afterwards (`Renderer::set_area_at`).
     pub fn draw(&self, batch: &mut SpriteBatch, font: &Font, screen: Screen) {
-        let l = title_layout(screen);
         batch.fill(Px::new(0.0, 0.0, screen.width, screen.height), BACK);
         let centred = |text: &str, scale: f32| (screen.width - Font::width(text, scale)) / 2.0;
-        font.draw(batch, "3D RTS", centred("3D RTS", TITLE), l.title, TITLE, BAR);
-        let y = l.title + Font::height(TITLE) + GAP;
-        font.draw(batch, "SKIRMISH", centred("SKIRMISH", BIG), y, BIG, INK);
+        let heading = |batch: &mut SpriteBatch, top: f32, under: &str| {
+            font.draw(batch, "3D RTS", centred("3D RTS", TITLE), top, TITLE, BAR);
+            font.draw(batch, under, centred(under, BIG), top + Font::height(TITLE) + GAP, BIG, INK);
+        };
+        if self.page == Page::Main {
+            heading(batch, main_title(screen), "A REAL-TIME STRATEGY ENGINE");
+            for (entry, r) in self.entries(screen) {
+                if entry.ready() {
+                    button(batch, font, r, entry.label(), if entry == Entry::Skirmish { PICKED } else { BUTTON });
+                } else {
+                    // Shown, so the menu reads like a game's, but greyed out until the engine can do it.
+                    batch.fill(r, BACK);
+                    batch.outline(r, 1.0, EDGE);
+                    let (label, note) = (entry.label(), "NOT YET");
+                    let y = r.y + (r.h - Font::height(BIG)) / 2.0;
+                    font.draw(batch, label, r.x + 2.0 * PAD, y, BIG, DIM);
+                    let x = r.x + r.w - 2.0 * PAD - Font::width(note, SMALL);
+                    font.draw(batch, note, x, r.y + (r.h - Font::height(SMALL)) / 2.0, SMALL, DIM);
+                }
+            }
+            return;
+        }
+        let l = title_layout(screen);
+        heading(batch, l.title, "SKIRMISH");
         let p = l.preview;
         batch.fill(p, SKY);
         batch.outline(Px::new(p.x - 2.0, p.y - 2.0, p.w + 4.0, p.h + 4.0), 2.0, EDGE);
@@ -180,7 +305,7 @@ impl Menu {
             let start = *row == Row::Start;
             button(batch, font, *r, &self.label(*row), if start { PICKED } else { BUTTON });
         }
-        let help = "CLICK TO CHANGE, RIGHT-CLICK TO STEP BACK, ENTER TO START";
+        let help = "CLICK TO CHANGE, RIGHT-CLICK TO STEP BACK, ENTER TO START, ESCAPE FOR THE MAIN MENU";
         font.draw(batch, help, centred(help, SMALL), l.help, SMALL, DIM);
     }
 }

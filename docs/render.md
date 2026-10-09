@@ -77,15 +77,17 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    on screen they happen. The sound card (the `sound` feature, on by default) opens at the start on the desktop and
    on the first click or key in the browser, which only allows sound after one; with no sound card the viewer is
    silent. M mutes.
-11. **A centred title menu; the game-over panel in the panel's place.** `menu` draws the title menu over the whole
-   screen with the same batch and font as the panel: the title, a framed window in which the scene shows the map
-   the options make, turning slowly (`Renderer::set_area_at` puts the scene's viewport anywhere on the screen), and
-   buttons two by two for the map seed (1 to 999), the number of players (2 to 4), the helper and watching only,
-   each stepping on with a click and back with a right-click, then Start across the column. When one side is
-   left, the game-over panel takes the side panel's place beside the battlefield: who won, how long it took, and
-   what each side built and lost (`menu::Tally`, counted from `Built` and `Destroyed` events), with Play again
-   (the same options) and Menu. Clicks are worked out with no GPU. Enter starts from the menu and plays again once
-   the game is over.
+11. **Menus first, as in any strategy game; the game-over panel in the panel's place.** `menu` draws over the whole
+   screen with the same batch and font as the panel. The main menu comes first: the title and a centred column of
+   Skirmish, Campaign and Load game, and Quit on the desktop (a browser tab has nothing to quit). Campaign and Load
+   game are shown greyed out with "not yet" until the engine has campaigns and saved games. Skirmish (or Enter)
+   opens the skirmish setup: a framed window in which the scene shows the map the options make, turning slowly
+   (`Renderer::set_area_at` puts the scene's viewport anywhere on the screen), and buttons two by two for the map
+   seed (1 to 999), the number of players (2 to 4), the helper and watching only, each stepping on with a click and
+   back with a right-click, then Back (or Escape) and Start (or Enter). When one side is left, the game-over panel
+   takes the side panel's place beside the battlefield: who won, how long it took, and what each side built and
+   lost (`menu::Tally`, counted from `Built` and `Destroyed` events), with Play again (the same options, or Enter)
+   and Menu (back to the main menu). Clicks and keys are worked out with no GPU.
 
 ## The viewer
 
@@ -93,7 +95,7 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 cargo run --release -p render3d --bin play3d -- --seed 1 --players 2
 ```
 
-It opens on the title menu (rule 11); the command line's options fill it in, and `--menu 0` (`?menu=0`) skips it.
+It opens on the main menu (rule 11); the command line's options fill it in, and `--menu 0` (`?menu=0`) skips it.
 You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) against computer players. Left-click
 a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
 to attack it or the ground to move there, with Ctrl held to attack-move. Double-click a unit to select all of its
@@ -123,11 +125,13 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
 Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
 Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, the
-wheel zooms, and, with the menu on, the page opens on it, a button steps on and Start begins the game. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
+wheel zooms, and, with the menus on, the page opens on the main menu, Skirmish opens the setup, a button steps on and Start
+begins the game. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
 store; that is still open.
 
 ## Later
 
+- Campaigns and saved games, which the main menu already lists as "not yet".
 - Control groups that a browser's own Ctrl+number shortcuts don't swallow; a rally point with several legs, or
   one that attack-moves.
 - Icons when zoomed far out; the detailed models close in.

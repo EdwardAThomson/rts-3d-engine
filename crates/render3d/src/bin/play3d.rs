@@ -5,11 +5,13 @@
 //! The same program runs in the browser (`web/play3d/`, see docs/render.md), drawing with WebGPU or WebGL2 into the
 //! page's canvas, with the options in the page address instead: `?seed=3&players=4&speed=8`.
 //!
-//! It opens on a title menu, centred on the screen (see `menu`): the map those options make turning in a window, and
-//! buttons for the map's seed, the number of players, the helper and watching only; Start or Enter begins. The options given on the
+//! It opens on the main menu (see `menu`): Skirmish, Campaign and Load game (both greyed out until the engine has
+//! them) and, on the desktop, Quit. Skirmish (or Enter) opens the skirmish setup, centred on the screen: the map the
+//! options make turning in a window, and buttons for the map's seed, the number of players, the helper and watching
+//! only, then Back (or Escape) and Start (or Enter). The options given on the
 //! command line or in the address fill the menu, and `--menu 0` skips it and starts straight away. When one side is
 //! left the panel shows who won, how long it took and what each side built and lost, with buttons (or Enter) to
-//! play the same game again or go back to the menu.
+//! play the same game again or go back to the main menu.
 //!
 //! Left-click a unit of yours to select it, or drag a box round several; shift adds to the selection. Right-click an
 //! enemy to attack it or the ground to move there; with Ctrl held, they attack-move and fight on the way. A computer
@@ -68,9 +70,9 @@ const SPEEDS: [u32; 6] = [1, 2, 4, 8, 16, 32];
 const SKY: [u8; 3] = [20, 24, 32];
 /// Two clicks, or two presses of a group's number, this close together are a double.
 const DOUBLE: Duration = Duration::from_millis(400);
-/// Radians a second the map in the title menu's window turns.
+/// Radians a second the map in the skirmish setup's window turns.
 const SHOWCASE_TURN: f32 = 0.12;
-/// How far in the map in the title menu's window is seen, as the camera's zoom.
+/// How far in the map in the skirmish setup's window is seen, as the camera's zoom.
 const SHOWCASE_ZOOM: f32 = 0.9;
 /// Share of the screen panned per second, and radians turned per second.
 const PAN: f32 = 0.8;
@@ -109,9 +111,11 @@ struct Running {
 }
 
 struct App {
-    /// On the title menu, with the world the menu's options make shown in its window, rather than playing.
+    /// In the menus, with the world the setup's options make shown in its window, rather than playing.
     in_menu: bool,
     menu: Menu,
+    /// Quit was chosen on the main menu; the program leaves after this frame.
+    quit: bool,
     /// The options the game being played was started with, for playing it again.
     options: Options,
     tally: Tally,
@@ -168,7 +172,8 @@ impl App {
         };
         let mut app = App {
             in_menu,
-            menu: Menu::new(options),
+            quit: false,
+            menu: Menu::new(options, cfg!(not(target_arch = "wasm32"))),
             options,
             tally: Tally::default(),
             showing: in_menu.then_some((options.seed, options.players)),
@@ -234,9 +239,10 @@ impl App {
         (self.last_click, self.last_group) = (None, None);
     }
 
-    /// Back to the title menu, showing the map its options make.
+    /// Back to the main menu, with the map the options make ready for the skirmish setup.
     fn back_to_menu(&mut self) {
         self.in_menu = true;
+        self.menu.page = menu::Page::Main;
         self.control = None;
         self.winner = None;
         self.showcase();
@@ -264,6 +270,7 @@ impl App {
             Pressed::Start => self.begin(self.menu.options),
             Pressed::Again => self.begin(self.options),
             Pressed::Menu => self.back_to_menu(),
+            Pressed::Quit => self.quit = true,
         }
     }
 
@@ -319,7 +326,12 @@ impl App {
     fn title(&self) -> String {
         if self.in_menu {
             let o = self.menu.options;
-            return format!("3D RTS viewer: menu, seed {}, {} players", o.seed, o.players);
+            return match self.menu.page {
+                menu::Page::Main => "3D RTS viewer: main menu".into(),
+                menu::Page::Skirmish => {
+                    format!("3D RTS viewer: skirmish setup, seed {}, {} players", o.seed, o.players)
+                }
+            };
         }
         let state = match (self.winner, self.paused) {
             (Some(p), _) if self.control.as_ref().is_some_and(|c| c.player == p) => ", you won".into(),
@@ -463,8 +475,10 @@ impl App {
             seen.focus[0] += shake * (now * 2.1).sin();
             seen.focus[1] += shake * (now * 2.9 + 1.0).cos();
         }
+        // On the main menu there is no scene to draw.
+        let scene_shown = !(self.in_menu && self.menu.page == menu::Page::Main);
         if self.in_menu {
-            // The map turns in the title menu's window.
+            // The map turns in the skirmish setup's window.
             let p = menu::title_layout(screen).preview;
             run.renderer.set_area_at(Some([p.x as u32, p.y as u32, p.w as u32, p.h as u32]));
         } else {
@@ -480,8 +494,8 @@ impl App {
         };
         let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let size = (run.config.width, run.config.height);
-        // The panel first, over the sky, then the scene beside it.
-        // The title menu over the whole screen, or the game-over panel or the panel down the right.
+        // The menus over the whole screen, or the game-over panel or the panel down the right, first; then the scene
+        // beside the panel or in the skirmish setup's window.
         if self.in_menu {
             self.menu.draw(&mut run.batch, &run.font, screen);
         } else if let Some(headline) = headline {
@@ -491,13 +505,15 @@ impl App {
             self.panel.draw(&run.gpu, &mut run.batch, &run.font, &self.world, control, &self.camera, screen, &state);
         }
         run.batch.draw(&run.gpu, &view, size.0, size.1, [SKY[0], SKY[1], SKY[2], 255]);
-        run.renderer.draw(&run.gpu, &view, size, &self.world, &seen, &shapes, SKY);
+        if scene_shown {
+            run.renderer.draw(&run.gpu, &view, size, &self.world, &seen, &shapes, SKY);
+        }
         run.gpu.queue.present(texture);
         run.window.set_title(&title);
         #[cfg(target_arch = "wasm32")]
         rts_platform::web::set_title(&title);
         self.frames += 1;
-        if self.max_frames.is_some_and(|m| self.frames >= m) {
+        if self.quit || self.max_frames.is_some_and(|m| self.frames >= m) {
             event_loop.exit();
         }
     }
@@ -614,7 +630,8 @@ impl App {
         self.open_speaker();
         if matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) {
             if self.in_menu {
-                self.pressed(Pressed::Start);
+                let p = self.menu.enter();
+                self.pressed(p);
             } else if self.winner.is_some() {
                 self.pressed(Pressed::Again);
             }
@@ -631,6 +648,7 @@ impl App {
                 }
             }
             KeyCode::Escape if self.panel.placing.is_some() => self.panel.placing = None,
+            KeyCode::Escape if self.in_menu && self.menu.back() => {}
             KeyCode::Escape if cfg!(not(target_arch = "wasm32")) => event_loop.exit(),
             KeyCode::Space => self.paused = !self.paused,
             KeyCode::Equal | KeyCode::NumpadAdd => self.speed = (self.speed + 1).min(SPEEDS.len() - 1),
