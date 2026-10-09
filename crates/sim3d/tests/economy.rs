@@ -20,6 +20,7 @@ fn types() -> Vec<UnitType> {
         movement: class(radius),
         max_health: 100,
         height: 48,
+        vision: 0,
         weapon: None,
         armour: 0,
         production,

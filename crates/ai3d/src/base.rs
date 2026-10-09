@@ -161,6 +161,17 @@ fn site_for(ai: &Ai, world: &World, b: &Unit, want: Want, plans: &[Site]) -> Opt
     }
 }
 
+/// Where the enemy's bases are, as far as `ai` knows: its known structures other than extractors, or with none
+/// known under fog of war, the guess.
+fn enemy_bases(ai: &Ai, world: &World) -> Vec<(i32, i32)> {
+    let types = world.types();
+    let bases: Vec<(i32, i32)> = (crate::known(world, ai.player).into_iter())
+        .filter(|k| is_structure(&types[k.kind]) && !types[k.kind].production.extracts)
+        .map(|k| k.pos)
+        .collect();
+    if bases.is_empty() && world.vision().is_some() { vec![crate::guess(ai, world)] } else { bases }
+}
+
 /// A site for an extractor builder `b` can build over a free spot of resource `r` on its side of the map (no
 /// nearer to an enemy structure, other than an extractor, than to home), nearest home first.
 fn spot_site(ai: &Ai, world: &World, b: &Unit, r: usize, plans: &[Site]) -> Option<Site> {
@@ -168,10 +179,7 @@ fn spot_site(ai: &Ai, world: &World, b: &Unit, r: usize, plans: &[Site]) -> Opti
     let kind = types[b.kind].production.builds.iter().copied().find(|&k| types[k].production.extracts)?;
     let s = types[kind].structure?;
     let home = ai.home();
-    let enemy: Vec<(i32, i32)> = (world.units().iter())
-        .filter(|u| u.owner != ai.player && is_structure(&types[u.kind]) && !types[u.kind].production.extracts)
-        .map(pos)
-        .collect();
+    let enemy = enemy_bases(ai, world);
     let ours = |at: (i32, i32)| {
         let d = dist2(home, at);
         enemy.iter().all(|&e| d <= dist2(e, at))
@@ -200,10 +208,7 @@ fn spot_site(ai: &Ai, world: &World, b: &Unit, r: usize, plans: &[Site]) -> Opti
 fn spot_wreck(ai: &Ai, world: &World, taken: &[u32]) -> Option<u32> {
     let types = world.types();
     let home = ai.home();
-    let enemy: Vec<(i32, i32)> = (world.units().iter())
-        .filter(|u| u.owner != ai.player && is_structure(&types[u.kind]) && !types[u.kind].production.extracts)
-        .map(pos)
-        .collect();
+    let enemy = enemy_bases(ai, world);
     let ours = |at: (i32, i32)| enemy.iter().all(|&e| dist2(home, at) <= dist2(e, at));
     (world.wrecks().iter())
         .filter(|w| !taken.contains(&w.id) && types[w.kind].structure.is_some())

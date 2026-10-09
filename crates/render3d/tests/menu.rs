@@ -79,13 +79,15 @@ fn the_skirmish_setup_is_centred_with_the_map_above_the_buttons() {
         let rows = &l.rows;
         assert_eq!(
             rows.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
-            [Row::Seed, Row::Players, Row::Helper, Row::Watch, Row::Back, Row::Start]
+            [Row::Seed, Row::Players, Row::Helper, Row::Watch, Row::Fog, Row::Back, Row::Start]
         );
-        // Two by two under the window, then Back and Start under them, filling the same column.
+        // Two by two under the window, fog of war across the column, then Back and Start under them.
         let r = |row: usize| rows[row].1;
         assert!(r(0).y > l.preview.y + l.preview.h && r(0).y == r(1).y && r(1).x > r(0).x + r(0).w);
-        assert!(r(2).y > r(0).y + r(0).h && r(4).y > r(2).y + r(2).h && r(4).y == r(5).y);
-        assert!(r(4).x == l.preview.x && (r(5).x + r(5).w - (l.preview.x + l.preview.w)).abs() < 1.0);
+        assert!(r(2).y > r(0).y + r(0).h && r(4).y > r(2).y + r(2).h && r(5).y > r(4).y + r(4).h);
+        assert!(r(4).x == l.preview.x && (r(4).w - l.preview.w).abs() < 1.0, "fog spans the column");
+        assert!(r(5).y == r(6).y);
+        assert!(r(5).x == l.preview.x && (r(6).x + r(6).w - (l.preview.x + l.preview.w)).abs() < 1.0);
         assert!(l.help + 8.0 <= screen.height, "everything fits on {screen:?}");
     }
     for (_, r) in menu::over_buttons(SCREEN) {
@@ -114,6 +116,10 @@ fn clicks_step_the_options_round_and_right_clicks_step_them_back() {
     assert!(!menu.options.helper && menu.options.watch);
     assert_eq!(menu.label(Row::Seed), format!("MAP SEED {}", menu::SEEDS));
     assert_eq!(menu.label(Row::Helper), "HELPER OFF");
+    assert!(menu.options.fog, "fog of war is on unless turned off");
+    menu.click(row(Row::Fog), SCREEN, false);
+    assert!(!menu.options.fog);
+    assert_eq!(menu.label(Row::Fog), "FOG OF WAR OFF");
     assert_eq!(menu.click(row(Row::Start), SCREEN, false), Pressed::Start);
     assert_eq!(menu.click((10.0, 10.0), SCREEN, false), Pressed::Nothing, "the scene is not the menu");
 }
@@ -217,7 +223,7 @@ fn the_title_menu_and_the_game_over_panel_draw_with_the_scene() {
             assert_eq!(pixel((p.x - 20.0, p.y + p.h / 2.0)), [30, 32, 38], "{name}: left of the window");
         }
         // The first button in the picked colour at its corner, with its label written across it.
-        let first = if over { menu::over_buttons(SCREEN)[0].1 } else { Menu::rows(SCREEN)[5].1 };
+        let first = if over { menu::over_buttons(SCREEN)[0].1 } else { Menu::rows(SCREEN)[6].1 };
         assert_eq!(pixel((first.x + 3.0, first.y + 3.0)), [70, 96, 140], "{name}: the main button");
         let mut seen = std::collections::BTreeSet::new();
         for x in first.x as u32..(first.x + first.w) as u32 {

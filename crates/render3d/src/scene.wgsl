@@ -2,14 +2,24 @@
 
 struct Globals {
     view_proj: mat4x4<f32>,
-    // xyz: the direction towards the sun; w: unused.
+    // xyz: the direction towards the sun; w: one over the map's width in cells.
     sun: vec4<f32>,
-    // The camera's right and up directions in view space, for quads that face it; w: unused.
+    // The camera's right and up directions in view space, for quads that face it; right.w: one over the map's
+    // height in cells, up.w: unused.
     right: vec4<f32>,
     up: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
+// Fog of war: how brightly each map cell is drawn, 1 in sight, less in fog, 0 in shroud.
+@group(0) @binding(1) var fog_map: texture_2d<f32>;
+@group(0) @binding(2) var fog_sampler: sampler;
+
+// How brightly to draw a point at `xy` (in cells) under fog of war: shroud is all but black.
+fn fog(xy: vec2<f32>) -> f32 {
+    let f = textureSampleLevel(fog_map, fog_sampler, xy * vec2<f32>(globals.sun.w, globals.right.w), 0.0).r;
+    return mix(0.03, 1.0, f);
+}
 
 struct Out {
     @builtin(position) clip: vec4<f32>,
@@ -69,7 +79,7 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     let edge = abs(fract(in.world.xy - 0.5) - 0.5) / max(width, vec2<f32>(1e-4));
     let line = (1.0 - clamp(min(edge.x, edge.y), 0.0, 1.0)) * (1.0 - smoothstep(0.15, 0.4, max(width.x, width.y)));
     let shade = 1.0 - 0.22 * line * in.ground;
-    return vec4<f32>(in.colour * light * shade, 1.0);
+    return vec4<f32>(in.colour * light * shade * fog(in.world.xy), 1.0);
 }
 
 // Flat rectangles over the whole scene, such as the drag box, given in clip space with their colour.
@@ -107,6 +117,8 @@ struct Model {
     @location(2) team: f32,
     // rgb: the owner's colour; a: 1 for a frame, a half for a wreck.
     @location(3) paint: vec4<f32>,
+    // The point in view space, for fog of war.
+    @location(4) world: vec3<f32>,
 };
 
 @vertex
@@ -123,7 +135,9 @@ fn vs_model(
 ) -> Model {
     let m = mat4x4<f32>(c0, c1, c2, c3);
     var out: Model;
-    out.clip = globals.view_proj * m * vec4<f32>(pos, 1.0);
+    let world = m * vec4<f32>(pos, 1.0);
+    out.clip = globals.view_proj * world;
+    out.world = world.xyz;
     out.normal = (m * vec4<f32>(normal, 0.0)).xyz;
     out.uv = uv;
     out.team = team;
@@ -140,7 +154,7 @@ fn fs_model(in: Model) -> @location(0) vec4<f32> {
     let wreck = step(0.25, in.paint.a) * (1.0 - frame);
     let colour = mix(painted, vec3<f32>(1.0), 0.5 * frame) * (1.0 - 0.7 * wreck);
     let light = 0.3 + 0.7 * max(dot(normalize(in.normal), globals.sun.xyz), 0.0);
-    return vec4<f32>(colour * light, 1.0);
+    return vec4<f32>(colour * light * fog(in.world.xy), 1.0);
 }
 
 // Effects: soft blobs of light, fire and smoke, each a quad turned to face the camera and blended over the scene.

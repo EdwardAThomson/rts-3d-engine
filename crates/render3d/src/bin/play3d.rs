@@ -1,14 +1,14 @@
 //! The viewer: a generic skirmish in a window, with you playing the first side (blue) against computer players.
 //!   cargo run --release -p render3d --bin play3d -- [--seed 1] [--players 2] [--speed 1] [--frames N] [--watch 1]
-//!       [--boxes 1] [--helper 0] [--menu 0]
+//!       [--boxes 1] [--helper 0] [--fog 0] [--menu 0]
 //!
 //! The same program runs in the browser (`web/play3d/`, see docs/render.md), drawing with WebGPU or WebGL2 into the
 //! page's canvas, with the options in the page address instead: `?seed=3&players=4&speed=8`.
 //!
 //! It opens on the main menu (see `menu`): Skirmish, Campaign and Load game (both greyed out until the engine has
 //! them) and, on the desktop, Quit. Skirmish (or Enter) opens the skirmish setup, centred on the screen: the map the
-//! options make turning in a window, and buttons for the map's seed, the number of players, the helper and watching
-//! only, then Back (or Escape) and Start (or Enter). The options given on the
+//! options make turning in a window, and buttons for the map's seed, the number of players, the helper, watching
+//! only and fog of war, then Back (or Escape) and Start (or Enter). The options given on the
 //! command line or in the address fill the menu, and `--menu 0` skips it and starts straight away. When one side is
 //! left the panel shows who won, how long it took and what each side built and lost, with buttons (or Enter) to
 //! play the same game again or go back to the main menu.
@@ -25,7 +25,9 @@
 //! for what the selection can make: click a structure's button, then the ground to place it (shift places more,
 //! right-click or Escape stops); click a unit's button to queue one in the selected factory, right-click to empty
 //! the queue. Its switch at the foot turns the helper off, so the whole side is yours; `--helper 0` starts with it
-//! off. `--watch 1` leaves every side to the computer. Units are drawn with the art studio's models; `--boxes 1` draws
+//! off. `--watch 1` leaves every side to the computer. The skirmish has fog of war: you see only what your units
+//! see, ground never seen is black, and enemy buildings you saw stay where you last saw them; `--fog 0` lifts it, and
+//! watching or the end of the game shows the whole map. Units are drawn with the art studio's models; `--boxes 1` draws
 //! the plain boxes instead.
 //!
 //! The mouse wheel zooms at the cursor, from a few units up to the whole map. Arrow keys or WASD pan, Q and E turn the
@@ -43,6 +45,7 @@ use std::time::Duration;
 use ai3d::{Ai, Settings, skirmish};
 use render3d::control::{CLICK, Control, Screen, outline};
 use render3d::effects::Effects;
+use render3d::fog;
 use render3d::menu::{self, Menu, Options, Pressed, Tally};
 use render3d::panel::{self, Clicked, Names, Panel};
 use render3d::shots::Looks;
@@ -222,11 +225,14 @@ impl App {
 
     /// Start a new game with these options, leaving the menu.
     fn begin(&mut self, options: Options) {
-        let Options { seed, players, helper, watch } = options;
+        let Options { seed, players, helper, watch, fog } = options;
         self.in_menu = false;
         self.showing = None;
         self.options = options;
         self.world = skirmish::skirmish(seed, players);
+        if !fog {
+            self.world.set_fog(None);
+        }
         self.camera = Camera::new(self.world.map());
         self.players = (0..players).collect();
         self.ais = (0..players).map(|p| Ai::new(p, Settings::normal())).collect();
@@ -262,6 +268,12 @@ impl App {
             self.shapes = Shapes::default();
             self.effects = Effects::with_looks(Looks::skirmish());
         }
+    }
+
+    /// The side whose view of the battlefield is drawn under fog of war: yours while you play; nobody's (the whole
+    /// map) in the menus, while watching and once the game is over.
+    fn viewer(&self) -> Option<u8> {
+        self.control.as_ref().filter(|_| !self.in_menu && self.winner.is_none()).map(|c| c.player)
     }
 
     /// What the menu or the game-over panel asked for.
@@ -330,7 +342,12 @@ impl App {
             return match self.menu.page {
                 menu::Page::Main => "3D RTS viewer: main menu".into(),
                 menu::Page::Skirmish => {
-                    format!("3D RTS viewer: skirmish setup, seed {}, {} players", o.seed, o.players)
+                    format!(
+                        "3D RTS viewer: skirmish setup, seed {}, {} players{}",
+                        o.seed,
+                        o.players,
+                        if o.fog { "" } else { ", no fog" }
+                    )
                 }
             };
         }
@@ -449,6 +466,8 @@ impl App {
         let title = self.title();
         let state = self.state();
         let headline = self.headline();
+        let viewer = self.viewer();
+        self.shapes.viewer = viewer;
         let mut shapes = self.shapes.shapes(&self.world, alpha);
         let Some(screen) = self.screen() else { return };
         let scene = self.panel.layout(screen).scene;
@@ -468,7 +487,11 @@ impl App {
         }
         run.renderer.set_overlay(&overlay);
         let now = self.world.tick() as f32 - 1.0 + alpha;
-        run.renderer.set_effects(&self.effects.puffs(&self.world, now, self.camera.pose().eye));
+        let mut puffs = self.effects.puffs(&self.world, now, self.camera.pose().eye);
+        fog::visible_puffs(&self.world, viewer, &mut puffs);
+        run.renderer.set_effects(&puffs);
+        let fogged = fog::brightness(&self.world, viewer);
+        run.renderer.set_fog(fogged.as_ref().map(|(w, h, cells)| (*w, *h, &cells[..])));
         // A building going up nearby shakes the view, for this frame's picture only; clicks use the steady camera.
         let mut seen = self.camera.clone();
         let shake = self.effects.shake(now, seen.focus);
@@ -809,6 +832,7 @@ fn options() -> Options {
         players: arg("players").and_then(|s| s.parse().ok()).filter(|p| menu::PLAYERS.contains(p)).unwrap_or(d.players),
         helper: !arg("helper").is_some_and(|h| h == "0"),
         watch: arg("watch").is_some_and(|w| w != "0"),
+        fog: !arg("fog").is_some_and(|f| f == "0"),
     }
 }
 

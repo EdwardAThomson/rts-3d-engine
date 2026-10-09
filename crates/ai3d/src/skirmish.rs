@@ -9,6 +9,7 @@ use sim3d::economy::{Production, Structure};
 use sim3d::movement::MoveClass;
 use sim3d::space::SUB;
 use sim3d::terrain::Heightmap;
+use sim3d::vision::FogRules;
 use sim3d::weapon::Weapon;
 use sim3d::world::{UnitType, World};
 
@@ -48,6 +49,8 @@ const STRUCTURE_ARMOUR: usize = 1;
 /// - factory: 3 by 3, builds builders, tanks and artillery at 20 work a tick.
 /// - tank: direct fire at 5 cells, weaker against structures.
 /// - artillery: lobbed shells at 10 cells with splash, stronger against structures, but fragile.
+///
+/// Each also has a vision range for fog of war, set below.
 pub fn types() -> Vec<UnitType> {
     let ground = MoveClass { speed: 24, max_slope: Some(160), climb_slowdown: 50, altitude: 0, radius: 80 };
     let fixed = MoveClass { speed: 0, ..ground.clone() };
@@ -56,6 +59,7 @@ pub fn types() -> Vec<UnitType> {
         movement,
         max_health,
         height: if structure.is_some() { 96 } else { 48 },
+        vision: 0,
         weapon: None,
         armour: if structure.is_some() { STRUCTURE_ARMOUR } else { 0 },
         production,
@@ -87,7 +91,7 @@ pub fn types() -> Vec<UnitType> {
         scatter: 64,
         against: vec![100, 150],
     };
-    vec![
+    let mut types = vec![
         unit(
             MoveClass { speed: 20, radius: 96, ..ground.clone() },
             800,
@@ -107,7 +111,13 @@ pub fn types() -> Vec<UnitType> {
             ..unit(MoveClass { speed: 28, ..ground.clone() }, 500, cost(60_000, 120_000, 1600), None)
         },
         UnitType { weapon: Some(shell), ..unit(ground, 300, cost(100_000, 200_000, 2400), None) },
-    ]
+    ];
+    // How far each sees under fog of war, in cells. Tanks see past their guns; artillery outranges its own sight,
+    // so it needs others to spot for it.
+    for (kind, cells) in [(BUILDER, 6), (GENERATOR, 4), (EXTRACTOR, 3), (FACTORY, 6), (TANK, 7), (ARTILLERY, 5)] {
+        types[kind].vision = cells;
+    }
+    types
 }
 
 /// The centre of each player's start cell, in sub-cell units: the corners, in the order north-west,
@@ -120,8 +130,9 @@ pub fn starts(players: u8) -> Vec<(i32, i32)> {
         .collect()
 }
 
-/// A skirmish for `players` (2 to 4): each starts with one builder and a store of 1000 of each resource. Player
-/// `p` starts in corner `p` of `starts`.
+/// A skirmish for `players` (2 to 4): each starts with one builder and a store of 1000 of each resource, under
+/// fog of war with the Classic engine's rules (`World::set_fog(None)` lifts it). Player `p` starts in corner `p` of
+/// `starts`.
 pub fn skirmish(seed: i32, players: u8) -> World {
     skirmish_turned(seed, players, 0)
 }
@@ -149,6 +160,7 @@ pub fn skirmish_turned(seed: i32, players: u8, turn: u8) -> World {
         world.set_store(p, vec![1_000_000, 1_000_000], vec![2_000_000, 2_000_000]);
         world.spawn_for(p, BUILDER, x, y);
     }
+    world.set_fog(Some(FogRules::default()));
     world
 }
 

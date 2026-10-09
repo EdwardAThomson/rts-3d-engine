@@ -44,7 +44,15 @@ pub struct Renderer {
     overlay_pipeline: wgpu::RenderPipeline,
     models: ModelDrawer,
     globals: wgpu::Buffer,
+    globals_layout: wgpu::BindGroupLayout,
     globals_bind: wgpu::BindGroup,
+    /// How brightly each map cell is drawn under fog of war (`set_fog`), its texture and its size in cells; a single
+    /// full-bright texel without fog.
+    fog: Vec<u8>,
+    fog_size: (u32, u32),
+    fog_texture: wgpu::Texture,
+    fog_sampler: wgpu::Sampler,
+    fog_dirty: bool,
     meshes: Vec<Mesh>,
     cube: (wgpu::Buffer, wgpu::Buffer),
     instances: Option<wgpu::Buffer>,
@@ -71,16 +79,34 @@ impl Renderer {
         });
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
@@ -220,11 +246,15 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let globals_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("globals"),
-            layout: &globals_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
+        // Fog is sampled between cell centres, so its edges are soft.
+        let fog_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("fog"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
         });
+        let fog_texture = fog_texture(gpu, (1, 1));
+        let globals_bind = globals_bind(gpu, &globals_layout, &globals, &fog_texture, &fog_sampler);
         let (corners, indices) = cube();
         let cube = (
             buffer(gpu, "cube", &corners, wgpu::BufferUsages::VERTEX),
@@ -237,7 +267,13 @@ impl Renderer {
             box_pipeline,
             overlay_pipeline,
             globals,
+            globals_layout,
             globals_bind,
+            fog: vec![255; 4],
+            fog_size: (1, 1),
+            fog_texture,
+            fog_sampler,
+            fog_dirty: true,
             meshes: Vec::new(),
             cube,
             instances: None,
@@ -254,6 +290,18 @@ impl Renderer {
     /// Draw each unit kind that has a model with it from now on, in place of its box.
     pub fn set_models(&mut self, gpu: &Gpu, models: Models) {
         self.models.set(gpu, models);
+    }
+
+    /// How brightly to draw each cell of a `width` by `height` map from the next frame on, row by row: 255 in sight,
+    /// less in fog, 0 in shroud (see `fog::brightness`). `None` draws the whole map bright.
+    pub fn set_fog(&mut self, fog: Option<(u32, u32, &[u8])>) {
+        let (size, bytes) = match fog {
+            Some((w, h, cells)) => ((w, h), cells.iter().flat_map(|&b| [b, b, b, 255]).collect()),
+            None => ((1, 1), vec![255; 4]),
+        };
+        if size != self.fog_size || bytes != self.fog {
+            (self.fog_size, self.fog, self.fog_dirty) = (size, bytes, true);
+        }
     }
 
     /// Rectangles to draw over the scene from the next frame on, in pixels from the top left; empty for none.
@@ -306,10 +354,16 @@ impl Renderer {
             }
         }
         let pose = camera.pose();
-        for f in normalize(SUN).into_iter().chain([0.0]).chain(pose.right).chain([0.0]).chain(pose.up).chain([0.0]) {
+        // The spare fourth numbers carry one over the map's size, to find a point's cell in the fog texture.
+        let per = [1.0 / map.width().max(1) as f32, 1.0 / map.height().max(1) as f32];
+        let sun = normalize(SUN).into_iter().chain([per[0]]);
+        for f in sun.chain(pose.right).chain([per[1]]).chain(pose.up).chain([0.0]) {
             globals.extend_from_slice(&f.to_le_bytes());
         }
         gpu.queue.write_buffer(&self.globals, 0, &globals);
+        if self.fog_dirty {
+            self.upload_fog(gpu);
+        }
         let step = camera.terrain_step();
         if !self.meshes.iter().any(|m| m.step == step) {
             let m = terrain::mesh(map, step);
@@ -414,6 +468,29 @@ impl Renderer {
             }
         }
         gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// Copy the fog to its texture, making a new one when the map's size changed.
+    fn upload_fog(&mut self, gpu: &Gpu) {
+        let (w, h) = self.fog_size;
+        let size = self.fog_texture.size();
+        if (size.width, size.height) != (w, h) {
+            self.fog_texture = fog_texture(gpu, (w, h));
+            self.globals_bind =
+                globals_bind(gpu, &self.globals_layout, &self.globals, &self.fog_texture, &self.fog_sampler);
+        }
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.fog_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &self.fog,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: None },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.fog_dirty = false;
     }
 
     /// Copy the boxes to the GPU, growing the buffer when it is too small.
@@ -558,6 +635,38 @@ pub fn read_back(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u8> {
 }
 
 /// A buffer holding `bytes`.
+fn fog_texture(gpu: &Gpu, (width, height): (u32, u32)) -> wgpu::Texture {
+    gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("fog"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+fn globals_bind(
+    gpu: &Gpu,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    fog: &wgpu::Texture,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    let view = fog.create_view(&Default::default());
+    gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("globals"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
+}
+
 pub(crate) fn buffer(gpu: &Gpu, label: &str, bytes: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
     let b = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),

@@ -74,6 +74,12 @@ impl Sounds {
                 }
                 _ => continue,
             };
+            // Under fog of war the player hears only what it can see.
+            let heard =
+                player.zip(world.vision()).is_none_or(|(p, v)| v.shows(p, at[0].floor() as i32, at[1].floor() as i32));
+            if !heard {
+                continue;
+            }
             if let Some(s) = self.sound(world, cue, at, camera, scene) {
                 out.push(s);
             }

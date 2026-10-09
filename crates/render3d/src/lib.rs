@@ -3,6 +3,8 @@
 //!
 //! - `control`: playing one side with the mouse: selecting, and orders from where the cursor points.
 //! - `effects`: flashes, bursts, blasts and smoke from the world's events, as soft blobs facing the camera.
+//! - `fog`: fog of war for the side being played: how brightly each cell is drawn, which effects show, the
+//!   minimap's shading.
 //! - `shots`: shots in flight in the setting's looks (tracers, shells, missiles) with the trails they leave.
 //! - `shapes`: what to draw, as plain boxes in view space, worked out from the world with no GPU, so it is tested on
 //!   its own. Units, structures and frames, wrecks and resource spots each get a box.
@@ -18,6 +20,7 @@
 
 pub mod control;
 pub mod effects;
+pub mod fog;
 pub mod json;
 pub mod menu;
 pub mod model;

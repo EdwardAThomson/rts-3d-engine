@@ -16,7 +16,10 @@
 //! - the army (`army.rs`): factories keep building builders up to a count and then fighters, which gather at a
 //!   rally point, defend the base, and set out in attack waves that grow each time.
 //!
-//! There is no fog of war yet, so it sees the whole map. Once fog exists it must read only what its units see.
+//! Under fog of war it reads only what its side knows (`known`): enemies its units see now and the enemy structures
+//! it remembers. Until it has found an enemy it guesses the enemy is across the map from home (the point mirrored
+//! through the middle, which suits the usual mirrored skirmish map) and sends its waves to scout the nearest
+//! unexplored ground to that guess, as the Classic engine's opponent does.
 
 #![deny(clippy::float_arithmetic, clippy::disallowed_types)]
 
@@ -220,3 +223,61 @@ fn cell((x, y): (i32, i32)) -> (i32, i32) {
 fn pos(u: &Unit) -> (i32, i32) {
     (u.pos.x, u.pos.y)
 }
+
+/// An enemy this player knows of: one its units see now, or a structure it remembers from earlier.
+#[derive(Clone, Copy, Debug)]
+struct Known {
+    id: u32,
+    kind: usize,
+    pos: (i32, i32),
+}
+
+/// Every enemy `me` knows of, in id order. Without fog of war that is every enemy.
+fn known(world: &World, me: u8) -> Vec<Known> {
+    let mut out: Vec<Known> = (world.units().iter())
+        .filter(|u| u.owner != me && world.sees(me, u.id))
+        .map(|u| Known { id: u.id, kind: u.kind, pos: pos(u) })
+        .collect();
+    if let Some(v) = world.vision() {
+        for g in v.ghosts(me) {
+            if out.binary_search_by_key(&g.id, |k| k.id).is_err() {
+                out.push(Known { id: g.id, kind: g.kind, pos: (g.pos.x, g.pos.y) });
+            }
+        }
+        out.sort_unstable_by_key(|k| k.id);
+    }
+    out
+}
+
+/// Where `ai` guesses the enemy is before it has found one: home mirrored through the middle of the map.
+fn guess(ai: &Ai, world: &World) -> (i32, i32) {
+    let (x, y) = ai.home();
+    (world.map().width() * SUB - 1 - x, world.map().height() * SUB - 1 - y)
+}
+
+/// Where to look for an enemy not yet found: the centre of the cell, on a grid every `SCOUT_GRID` cells, that
+/// `ai`'s side has never seen, nearest the guess (ties to row order); failing that, one it does not see now; failing
+/// that, the guess.
+fn scout(ai: &Ai, world: &World) -> (i32, i32) {
+    let target = guess(ai, world);
+    let Some(v) = world.vision() else { return target };
+    let (w, h) = (world.map().width(), world.map().height());
+    let mut best: Option<((sim3d::vision::CellView, i64), (i32, i32))> = None;
+    for cy in (SCOUT_GRID / 2..h).step_by(SCOUT_GRID as usize) {
+        for cx in (SCOUT_GRID / 2..w).step_by(SCOUT_GRID as usize) {
+            let view = v.cell(ai.player, cx, cy);
+            if view == sim3d::vision::CellView::Visible {
+                continue;
+            }
+            let p = (cx * SUB + SUB / 2, cy * SUB + SUB / 2);
+            let key = (view, dist2(p, target));
+            if best.is_none_or(|(b, _)| key < b) {
+                best = Some((key, p));
+            }
+        }
+    }
+    best.map_or(target, |(_, p)| p)
+}
+
+/// Spacing of the points the opponent scouts, in cells.
+const SCOUT_GRID: i32 = 4;

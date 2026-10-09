@@ -38,6 +38,11 @@ self-play runs to tune.
    cap.
 8. **Defeat.** A player with no structure, frame or builder left has lost; fighters alone cannot rebuild. The
    last player standing wins.
+9. **Fog of war.** With fog on it knows only what its side sees now, plus the enemy structures it remembers
+   (`known`). With no enemy known it guesses the enemy is at its own home mirrored through the middle of the map:
+   the rally point leans that way, and a wave sent out with nothing to attack scouts (`scout`), heading for points
+   on a four-cell grid that are shroud first, then fog, nearest that guess. Bases it has never seen draw no
+   attacks and don't affect its site choices.
 
 ## Self-play
 
@@ -54,6 +59,7 @@ the seed, the same way whoever sits there, so a mirrored game is not settled by 
 cargo run --release -p ai3d --bin selfplay -- --seed 1 --ticks 36000 --every 3000
 cargo run --release -p ai3d --bin selfplay -- --seeds 1..20
 cargo run --release -p ai3d --bin selfplay -- --seed 1 --idle 1    # player 1 does nothing
+cargo run --release -p ai3d --bin selfplay -- --seeds 1..10 --fog 0  # without fog of war
 ```
 
 Each seed is played once per seat arrangement, so every player gets every corner (`--turn N` plays one). Each
@@ -83,9 +89,13 @@ few ties that still break one way (exact ties at a corner, the fixed exit side o
 whole run. Thirty seeds, both seatings, up to 30,000 ticks: wins by corner 30 to 26, by player 30 to 26, 4 with
 no winner, mean length about 13,200 ticks.
 
+With fog of war on (9 Oct 2026), ten seeds, both seatings: 17 of 20 games decided, mean length about 17,900
+ticks; the same seeds without fog (`--fog 0`): 18 of 20, about 14,200 ticks. Finding the enemy costs the first
+wave some time; the undecided games are the same slow economic stand-offs as without fog.
+
 ## Later
 
-- Fog of war: read only what its own units see, once the engine has fog.
+- Sending a cheap unit to scout early, instead of the first wave doing it.
 - Settings from data (difficulty levels) instead of `Settings::normal()`.
 - Assisting factories, which the economy does not yet allow; aircraft and naval roles; choosing fighter kinds by
   what the enemy fields (counters by armour class).
