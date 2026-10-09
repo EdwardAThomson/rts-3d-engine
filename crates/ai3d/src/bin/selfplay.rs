@@ -10,6 +10,7 @@
 //! cancels out of the totals; the summary also counts wins by corner, which is how such an edge shows up.
 //! `--turn N` plays only arrangement `N` (player `p` in corner `(p + N) % players`).
 //!
+//! `--fog 0` plays without fog of war.
 //! `--idle 1` leaves player 1 without an AI, to check the opponent can beat a player who does nothing.
 
 use ai3d::skirmish::skirmish_turned;
@@ -25,10 +26,11 @@ struct Args {
     players: u8,
     idle: Vec<u8>,
     turn: Option<u8>,
+    fog: bool,
 }
 
 fn parse() -> Args {
-    let mut args = Args { seeds: (1, 1), ticks: 36_000, every: 0, players: 2, idle: Vec::new(), turn: None };
+    let mut args = Args { seeds: (1, 1), ticks: 36_000, every: 0, players: 2, idle: Vec::new(), turn: None, fog: true };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
         let value = it.next().unwrap_or_else(|| usage(&format!("{flag} needs a value")));
@@ -43,6 +45,7 @@ fn parse() -> Args {
             "--every" => args.every = int(&value) as u32,
             "--players" => args.players = int(&value).clamp(2, 4) as u8,
             "--turn" => args.turn = Some(int(&value) as u8),
+            "--fog" => args.fog = int(&value) != 0,
             "--idle" => args.idle = value.split(',').map(|p| int(p) as u8).collect(),
             _ => usage(&format!("unknown flag {flag}")),
         }
@@ -52,7 +55,7 @@ fn parse() -> Args {
 
 fn usage(error: &str) -> ! {
     eprintln!(
-        "{error}\nusage: selfplay [--seed N | --seeds A..B] [--ticks N] [--every N] [--players 2-4] [--turn N] [--idle P,..]"
+        "{error}\nusage: selfplay [--seed N | --seeds A..B] [--ticks N] [--every N] [--players 2-4] [--turn N] [--fog 0|1] [--idle P,..]"
     );
     exit(2)
 }
@@ -70,6 +73,9 @@ struct Game {
 
 fn play(seed: i32, turn: u8, args: &Args) -> Game {
     let mut world = skirmish_turned(seed, args.players, turn);
+    if !args.fog {
+        world.set_fog(None);
+    }
     let players: Vec<u8> = (0..args.players).collect();
     let mut ais: Vec<Ai> =
         players.iter().filter(|p| !args.idle.contains(p)).map(|&p| Ai::new(p, Settings::normal())).collect();

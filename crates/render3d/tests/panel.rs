@@ -231,7 +231,7 @@ fn the_panel_draws_beside_the_scene_with_the_sides_on_the_minimap() {
     // The ghost of the generator under the cursor, green.
     let [r, g, b] = pixel(cursor.0, cursor.1);
     assert!(g > r + 40 && g > b + 40, "the ghost is green: {:?}", [r, g, b]);
-    // Each player's builder on the minimap in its colour.
+    // Each player's builder on the minimap in its colour, except that fog of war hides the enemy's from blue.
     for u in world.units() {
         let p = view3d::to_view(u.pos);
         let scale = l.minimap.w / skirmish::SIZE as f32;
@@ -243,7 +243,8 @@ fn the_panel_draws_beside_the_scene_with_the_sides_on_the_minimap() {
         } else {
             9
         };
-        assert_eq!(leans, u.owner, "unit {} on the minimap", u.id);
+        let shown = if u.owner == control.player { u.owner } else { 9 };
+        assert_eq!(leans, shown, "unit {} on the minimap", u.id);
     }
     // Text in the stock and button rows: more than one colour in each.
     let colours = |y0: f32, y1: f32| {

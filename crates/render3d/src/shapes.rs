@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use sim3d::space::{SUB, Vec3};
+use sim3d::vision::CellView;
 use sim3d::world::World;
 use view3d::maths::V3;
 use view3d::{HEIGHT_PER_CELL, ground, to_view};
@@ -36,6 +37,8 @@ pub enum Part {
     Site(i32, i32),
     /// A selected factory's rally point, by the factory's id.
     Rally(u32),
+    /// An enemy structure as the viewer last saw it under fog of war, by its id; drawn, never picked.
+    Ghost(u32),
 }
 
 /// An axis-aligned box from `min` to `max` in view space.
@@ -80,6 +83,9 @@ const SPOT_COLOUR: [u8; 4] = [210, 170, 60, 255];
 /// Turns a world into shapes, remembering where things were at the last tick so it can draw them in between.
 #[derive(Clone, Debug, Default)]
 pub struct Shapes {
+    /// The player whose view of the world is drawn under fog of war: enemies it doesn't see are left out, and the
+    /// enemy structures it remembers are drawn where it last saw them. `None` draws everything.
+    pub viewer: Option<u8>,
     before: BTreeMap<u32, Vec3>,
     /// Which way each mobile unit last moved, kept while it stands still.
     headings: BTreeMap<u32, f32>,
@@ -107,7 +113,12 @@ impl Shapes {
     pub fn shapes(&self, world: &World, alpha: f32) -> Vec<Shape> {
         let map = world.map();
         let mut out = Vec::new();
-        for spot in world.spots() {
+        let vision = self.viewer.zip(world.vision());
+        // What lies on ground the viewer has never seen is unknown.
+        let explored = |x: f32, y: f32| {
+            vision.is_none_or(|(p, v)| v.cell(p, x.floor() as i32, y.floor() as i32) != CellView::Shroud)
+        };
+        for spot in world.spots().iter().filter(|s| explored(s.cx as f32, s.cy as f32)) {
             let (x, y) = (spot.cx as f32 + 0.5, spot.cy as f32 + 0.5);
             let z = ground(map, x, y);
             let part = Part::Spot(spot.cx, spot.cy);
@@ -116,7 +127,7 @@ impl Shapes {
         // Wrecks: a structure's covers the footprint it blocks, a mobile unit's is a low heap that others drive over.
         // Each lies at its own angle, which only looks matter, so it comes from the wreck's id.
         let mut heaps = Vec::new();
-        for w in world.wrecks() {
+        for w in world.wrecks().iter().filter(|w| explored(w.pos.x as f32 / SUB as f32, w.pos.y as f32 / SUB as f32)) {
             let t = &world.types()[w.kind];
             let p = to_view(w.pos);
             let (min, max, structure) = match t.structure {
@@ -138,7 +149,8 @@ impl Shapes {
             let pose = Pose { kind: w.kind, structure, yaw, aim: yaw + 0.6, grown: WRECK_SHARE };
             out.push(Shape { part: Part::Wreck(w.id), min, max, colour: WRECK_COLOUR, unit: Some(pose) });
         }
-        for u in world.units() {
+        let seen = |u: &sim3d::world::Unit| self.viewer.is_none_or(|p| world.sees(p, u.id));
+        for u in world.units().iter().filter(|u| seen(u)) {
             let t = &world.types()[u.kind];
             let [r, g, b] = PLAYER_COLOURS[usize::from(u.owner) % PLAYER_COLOURS.len()];
             let tall = t.height as f32 / HEIGHT_PER_CELL;
@@ -180,6 +192,21 @@ impl Shapes {
                     colour: [r, g, b, 255],
                     unit: Some(Pose { kind: u.kind, structure: false, yaw, aim: self.aim(world, u, yaw), grown: 1.0 }),
                 });
+            }
+        }
+        // Enemy structures the viewer remembers but can't see now, where it last saw them.
+        if let Some((p, v)) = vision {
+            for g in v.ghosts(p).iter().filter(|g| world.unit(g.id).is_none_or(|u| !seen(u))) {
+                let t = &world.types()[g.kind];
+                let Some(st) = t.structure else { continue };
+                let (x0, y0) =
+                    ((g.pos.x - st.width * SUB / 2).div_euclid(SUB), (g.pos.y - st.depth * SUB / 2).div_euclid(SUB));
+                let z = g.pos.z as f32 / HEIGHT_PER_CELL;
+                let min = [x0 as f32, y0 as f32, z];
+                let max = [(x0 + st.width) as f32, (y0 + st.depth) as f32, z + t.height as f32 / HEIGHT_PER_CELL];
+                let [r, gr, b] = PLAYER_COLOURS[usize::from(g.owner) % PLAYER_COLOURS.len()];
+                let pose = Pose { kind: g.kind, structure: true, yaw: 0.0, aim: 0.0, grown: 1.0 };
+                out.push(Shape { part: Part::Ghost(g.id), min, max, colour: [r, gr, b, 255], unit: Some(pose) });
             }
         }
         out

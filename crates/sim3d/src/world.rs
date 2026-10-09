@@ -28,6 +28,7 @@ use crate::economy::{Job, Production, Spot, Store, Structure, Wreck, affordable,
 use crate::movement::{FlowField, MoveClass, can_step};
 use crate::space::{SUB, Vec3};
 use crate::terrain::Heightmap;
+use crate::vision::{FogRules, Vision};
 use crate::weapon::{Projectile, Weapon};
 use rts_core::hash::{Canon, CanonHasher};
 use rts_core::imath::isqrt;
@@ -153,6 +154,9 @@ pub struct UnitType {
     /// Height of the unit's body above the point it stands on, in height units. Shots strike anywhere in the
     /// cylinder of this height and the movement radius, leave from its top and aim at its middle.
     pub height: i32,
+    /// How far it sees, in cells, when the game has fog of war (`vision`); 0 sees nothing. Separate from its
+    /// weapon's range, as in the Classic engine, so long guns need spotters.
+    pub vision: i32,
     pub weapon: Option<Weapon>,
     /// Armour class, an index into every weapon's `against` list.
     pub armour: usize,
@@ -268,6 +272,8 @@ pub struct World {
     /// The cells under a structure's footprint, one per cell in row order. Derived from the units, so it is a
     /// cache and not part of the state hash.
     blocked: Vec<bool>,
+    /// Fog of war, when the game has it.
+    vision: Option<Vision>,
 }
 
 impl World {
@@ -310,6 +316,34 @@ impl World {
             commands: CommandQueue::default(),
             fields: BTreeMap::new(),
             blocked: Vec::new(),
+            vision: None,
+        }
+    }
+
+    /// Turn fog of war on with these rules, or off. Part of setting up a game, before the first tick; a world
+    /// starts without it.
+    pub fn set_fog(&mut self, rules: Option<FogRules>) {
+        self.vision = rules.map(|r| Vision::new(&self.map, r));
+        self.update_vision();
+    }
+
+    /// The fog of war, if the game has it.
+    pub fn vision(&self) -> Option<&Vision> {
+        self.vision.as_ref()
+    }
+
+    /// Whether `player` sees unit `id` now: always without fog of war; with it, its own units and those in its sight.
+    pub fn sees(&self, player: u8, id: u32) -> bool {
+        self.unit(id).is_some_and(|u| self.sees_unit(player, u))
+    }
+
+    fn sees_unit(&self, player: u8, u: &Unit) -> bool {
+        self.vision.as_ref().is_none_or(|v| v.sees(player, &self.types[u.kind], u))
+    }
+
+    fn update_vision(&mut self) {
+        if let Some(v) = &mut self.vision {
+            v.update(&self.map, &self.types, &self.units, self.tick);
         }
     }
 
@@ -385,6 +419,7 @@ impl World {
         if self.types[kind].structure.is_some() {
             self.reblock();
         }
+        self.update_vision();
         id
     }
 
@@ -476,6 +511,7 @@ impl World {
         self.construct(&mut events);
         self.economy(&mut events);
         self.tick += 1;
+        self.update_vision();
         events
     }
 
@@ -526,6 +562,12 @@ impl World {
                 (unit.target, unit.chase) = (None, false);
                 continue;
             };
+            if !self.sees_unit(self.units[i].owner, &self.units[t]) {
+                // Lost from sight: the attack ends, though a chase drives on to where it was last aimed.
+                let unit = &mut self.units[i];
+                (unit.target, unit.chase) = (None, false);
+                continue;
+            }
             let (muzzle, middle, in_range, in_sight) = self.aim(i, t, &weapon);
             let me = &self.units[i];
             if !(in_range && in_sight) && !me.chase {
@@ -570,6 +612,15 @@ impl World {
             self.next_id += 1;
             self.projectiles.push(Projectile::launch(id, (shooter, owner), kind, &weapon, muzzle, aim));
             events.push(Event::Fired { unit: shooter, projectile: id, from: muzzle, aim });
+            // Firing gives the shooter away to the side it fired at.
+            let victim = self.units[t].owner;
+            if let Some(v) = &mut self.vision
+                && victim != owner
+            {
+                let at = &self.units[i].pos;
+                let until = self.tick + v.rules.reveal_ticks;
+                v.reveal(victim, (at.x.div_euclid(SUB), at.y.div_euclid(SUB)), until);
+            }
         }
     }
 
@@ -597,6 +648,7 @@ impl World {
             .iter()
             .enumerate()
             .filter(|(_, u)| u.owner != me.owner && weapon.percent_against(self.types[u.kind].armour) > 0)
+            .filter(|(_, u)| self.sees_unit(me.owner, u))
             .filter_map(|(t, u)| {
                 let (dx, dy) = (i64::from(u.pos.x - me.pos.x), i64::from(u.pos.y - me.pos.y));
                 let d2 = dx * dx + dy * dy;
@@ -1117,6 +1169,7 @@ impl World {
                 if let Some(i) = self.index_of(unit)
                     && unit != target
                     && self.types[self.units[i].kind].weapon.is_some()
+                    && self.sees(self.units[i].owner, target)
                 {
                     let u = &mut self.units[i];
                     (u.target, u.chase, u.hunt, u.plan, u.assist) = (Some(target), true, false, None, None);
@@ -1144,6 +1197,7 @@ impl Canon for World {
             .opt("stores", (!self.stores.is_empty()).then_some(&self.stores))
             .field("tick", &self.tick)
             .array("units", &self.units)
+            .opt("vision", self.vision.as_ref())
             .opt("wrecks", (!self.wrecks.is_empty()).then_some(&self.wrecks))
             .end();
     }

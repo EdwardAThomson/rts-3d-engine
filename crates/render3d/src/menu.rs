@@ -36,11 +36,13 @@ pub struct Options {
     pub helper: bool,
     /// Whether every side is left to the computer.
     pub watch: bool,
+    /// Whether the game has fog of war.
+    pub fog: bool,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { seed: 1, players: 2, helper: true, watch: false }
+        Options { seed: 1, players: 2, helper: true, watch: false, fog: true }
     }
 }
 
@@ -84,6 +86,7 @@ pub enum Row {
     Players,
     Helper,
     Watch,
+    Fog,
     Back,
     Start,
 }
@@ -162,11 +165,14 @@ pub struct TitleLayout {
     pub title: f32,
     /// The window the map is drawn in.
     pub preview: Px,
-    /// Each row's button: the four options two by two, then Back and Start.
+    /// Each row's button: four options two by two and fog of war across both columns, then Back and Start.
     pub rows: Vec<(Row, Px)>,
     /// The top of the help line under Start.
     pub help: f32,
 }
+
+/// Rows of option buttons on the skirmish setup.
+const OPTION_ROWS: f32 = 3.0;
 
 /// The skirmish setup's layout: a column centred across the screen, the title at the top, the map's window taking what
 /// height is left after the buttons.
@@ -175,13 +181,13 @@ pub fn title_layout(screen: Screen) -> TitleLayout {
     let x = (screen.width - w) / 2.0;
     let title = (screen.height * 0.07).max(3.0 * PAD);
     let under = title + heading_height() + BELOW_HEADING;
-    let buttons = 2.0 * (BUTTON_H + GAP) + 2.0 * GAP + BUTTON_H + 2.0 * GAP + Font::height(SMALL) + PAD;
+    let buttons = OPTION_ROWS * (BUTTON_H + GAP) + 2.0 * GAP + BUTTON_H + 2.0 * GAP + Font::height(SMALL) + PAD;
     let preview_h = (screen.height - under - buttons - 2.0 * GAP).max(BUTTON_H);
     let preview = Px::new(x, under, w, preview_h);
     let top = preview.y + preview.h + 2.0 * GAP;
     let half = (w - GAP) / 2.0;
     let at = |col: f32, row: f32| Px::new(x + col * (half + GAP), top + row * (BUTTON_H + GAP), half, BUTTON_H);
-    let last = top + 2.0 * (BUTTON_H + GAP) + 2.0 * GAP;
+    let last = top + OPTION_ROWS * (BUTTON_H + GAP) + 2.0 * GAP;
     let back = Px::new(x, last, half, BUTTON_H);
     let start = Px::new(x + half + GAP, last, half, BUTTON_H);
     TitleLayout {
@@ -192,6 +198,7 @@ pub fn title_layout(screen: Screen) -> TitleLayout {
             (Row::Players, at(1.0, 0.0)),
             (Row::Helper, at(0.0, 1.0)),
             (Row::Watch, at(1.0, 1.0)),
+            (Row::Fog, Px::new(x, top + 2.0 * (BUTTON_H + GAP), w, BUTTON_H)),
             (Row::Back, back),
             (Row::Start, start),
         ],
@@ -242,6 +249,7 @@ impl Menu {
             }
             Row::Helper => o.helper = !o.helper,
             Row::Watch => o.watch = !o.watch,
+            Row::Fog => o.fog = !o.fog,
             Row::Back => self.page = Page::Main,
             Row::Start => return Pressed::Start,
         }
@@ -273,6 +281,7 @@ impl Menu {
             Row::Players => format!("PLAYERS {}", o.players),
             Row::Helper => format!("HELPER {}", on(o.helper)),
             Row::Watch => format!("WATCH ONLY {}", on(o.watch)),
+            Row::Fog => format!("FOG OF WAR {}", on(o.fog)),
             Row::Back => "BACK".into(),
             Row::Start => "START".into(),
         }

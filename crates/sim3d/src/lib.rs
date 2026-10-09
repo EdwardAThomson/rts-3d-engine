@@ -10,5 +10,6 @@ pub mod movement;
 pub mod replay;
 pub mod space;
 pub mod terrain;
+pub mod vision;
 pub mod weapon;
 pub mod world;

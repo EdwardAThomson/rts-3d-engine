@@ -14,12 +14,14 @@ use rts_platform::Gpu;
 use rts_platform::batch::{Rect as Px, SpriteBatch, TexId};
 use rts_platform::text::Font;
 use sim3d::space::SUB;
+use sim3d::vision::CellView;
 use sim3d::world::{Command, World};
 use view3d::camera::Camera;
 use view3d::pick::{Ray, ground_hit};
 use view3d::{ground, to_view};
 
 use crate::control::{Control, Screen};
+use crate::fog;
 use crate::shapes::{PLAYER_COLOURS, Part, Shape};
 
 /// The panel's width in pixels.
@@ -380,16 +382,35 @@ impl Panel {
             Px::new(l.minimap.x, l.minimap.y, mw * scale, mh * scale),
             [255; 4],
         );
-        for s in world.spots() {
+        // Under fog of war: shroud black, fog dimmed, and only what the side knows of drawn on it.
+        let viewer = control.map(|c| c.player);
+        let vision = viewer.zip(world.vision());
+        let known = |x: i32, y: i32| vision.is_none_or(|(p, v)| v.cell(p, x, y) != CellView::Shroud);
+        for (x, y, run, view) in fog::minimap_runs(world, viewer) {
+            let alpha = if view == CellView::Shroud { 255 } else { 120 };
+            let at = Self::to_minimap(world, l.minimap, [x as f32, y as f32]);
+            batch.fill(Px::new(at.0, at.1, run as f32 * scale, scale), [0, 0, 0, alpha]);
+        }
+        for s in world.spots().iter().filter(|s| known(s.cx, s.cy)) {
             let (x, y) = Self::to_minimap(world, l.minimap, [s.cx as f32 + 0.5, s.cy as f32 + 0.5]);
             batch.fill(Px::new(x - 1.0, y - 1.0, 2.0, 2.0), BAR);
         }
-        for w in world.wrecks() {
+        for w in world.wrecks().iter().filter(|w| known(w.pos.x.div_euclid(SUB), w.pos.y.div_euclid(SUB))) {
             let p = to_view(w.pos);
             let (x, y) = Self::to_minimap(world, l.minimap, [p[0], p[1]]);
             batch.fill(Px::new(x - 1.5, y - 1.5, 3.0, 3.0), [110, 105, 100, 255]);
         }
-        for u in world.units() {
+        let ghosts = vision.map_or(&[][..], |(p, v)| v.ghosts(p));
+        let ghosts = ghosts.iter().filter(|g| viewer.is_some_and(|p| !world.sees(p, g.id)));
+        for g in ghosts {
+            let p = to_view(g.pos);
+            let [r, gr, b] = PLAYER_COLOURS[usize::from(g.owner) % PLAYER_COLOURS.len()];
+            let half =
+                world.types()[g.kind].structure.map_or(1.5, |s| (s.width.max(s.depth) as f32 * scale / 2.0).max(2.0));
+            let (x, y) = Self::to_minimap(world, l.minimap, [p[0], p[1]]);
+            batch.fill(Px::new(x - half, y - half, half * 2.0, half * 2.0), [r / 2, gr / 2, b / 2, 255]);
+        }
+        for u in world.units().iter().filter(|u| viewer.is_none_or(|p| world.sees(p, u.id))) {
             let p = to_view(u.pos);
             let [r, g, b] = PLAYER_COLOURS[usize::from(u.owner) % PLAYER_COLOURS.len()];
             let colour = if u.build.is_some() { [r / 2 + 100, g / 2 + 100, b / 2 + 100, 255] } else { [r, g, b, 255] };

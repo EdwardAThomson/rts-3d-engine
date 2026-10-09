@@ -23,6 +23,7 @@ fn types() -> Vec<UnitType> {
         movement,
         max_health,
         height: 64,
+        vision: 0,
         weapon: None,
         armour: 0,
         production,

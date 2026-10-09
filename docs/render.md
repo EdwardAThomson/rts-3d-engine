@@ -85,7 +85,7 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    game are shown greyed out with "not yet" until the engine has campaigns and saved games. Skirmish (or Enter)
    opens the skirmish setup: a framed window in which the scene shows the map the options make, turning slowly
    (`Renderer::set_area_at` puts the scene's viewport anywhere on the screen), and buttons two by two for the map
-   seed (1 to 999), the number of players (2 to 4), the helper and watching only, each stepping on with a click and
+   seed (1 to 999), the number of players (2 to 4), the helper and watching only, fog of war on a full-width row, each stepping on with a click and
    back with a right-click, then Back (or Escape) and Start (or Enter). When one side is left, the game-over panel
    takes the side panel's place beside the battlefield: who won, how long it took, and what each side built and
    lost (`menu::Tally`, counted from `Built` and `Destroyed` events), with Play again (the same options, or Enter)
@@ -102,6 +102,12 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    with a `stretch` is a streak: the shader lays a capsule along the stretch as the camera sees it, so end on it is
    a round blob. Like the other effects these only read; tracers and smoking rocket trails are the genre's usual
    look, and the code and numbers are ours.
+13. **Fog of war is drawn for the side being played.** `fog::brightness` gives every cell a brightness (in sight
+   255, fog 120, shroud 0) that the renderer uploads as a small texture, one texel a cell with linear filtering, so
+   edges are soft; the ground, boxes and models are darkened by it in the shaders. Enemy units out of sight are
+   left out (`Shapes::viewer`), enemy structures the side remembers are drawn where it last saw them, effects and
+   sounds out of sight are dropped, and the minimap shades fog and blacks out shroud. Watching, the menus and the
+   game-over panel show everything. The setup's Fog of war button (`--fog 0`, `?fog=0`) turns fog off for a game.
 
 ## The viewer
 
@@ -119,7 +125,7 @@ player) runs your base and factories and sends waves with the fighters you leave
 order it is yours alone, and the helper's orders for it are dropped, an idea we take from Supreme Commander's and
 Total Annihilation's automation of the chores. The panel on the right (rule 8) builds and produces; its switch
 turns the helper off, so the whole side is yours, and `--helper 0` (`?helper=0`) starts with it off. `--watch 1`
-(`?watch=1` in the browser) leaves every side to the computer, and `--boxes 1` draws boxes in place of the models.
+(`?watch=1` in the browser) leaves every side to the computer, `--fog 0` (`?fog=0`) turns fog of war off, and `--boxes 1` draws boxes in place of the models.
 The wheel zooms at the cursor, arrow keys or WASD
 pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape stops
 placing a structure, or else quits. M mutes the sound.
@@ -139,7 +145,7 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
 Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
 Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, the
-wheel zooms, and, with the menus on, the page opens on the main menu, Skirmish opens the setup, a button steps on and Start
+wheel zooms, and, with the menus on, the page opens on the main menu, Skirmish opens the setup, a button steps on, the fog button turns fog off and Start
 begins the game. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
 store; that is still open.
 
