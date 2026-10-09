@@ -186,22 +186,6 @@ fn shapes_cover_spots_units_frames_and_shots() {
     assert!(heights.windows(2).all(|w| w[1] >= w[0]) && heights.last() > heights.first(), "and grew");
 }
 
-#[test]
-fn shots_in_flight_are_drawn() {
-    let mut world = World::new(sim3d::terrain::Heightmap::flat(24, 24, 0), skirmish::types(), 1);
-    world.spawn_for(0, skirmish::TANK, 4 * SUB, 4 * SUB);
-    world.spawn_for(1, skirmish::TANK, 8 * SUB, 4 * SUB);
-    let shapes = Shapes::default();
-    let mut seen = 0;
-    for _ in 0..200 {
-        world.step();
-        let shots = shapes.shapes(&world, 1.0).into_iter().filter(|s| matches!(s.part, Part::Projectile(_))).count();
-        assert_eq!(shots, world.projectiles().len());
-        seen += shots;
-    }
-    assert!(seen > 0, "the tanks fired");
-}
-
 /// A minimal PNG writer (stored, uncompressed), so a test can leave a frame to look at without a dependency.
 fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) {
     fn crc(data: &[u8]) -> u32 {

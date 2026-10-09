@@ -27,23 +27,23 @@ pub const WIDTH: f32 = 260.0;
 /// Ticks in a second of game time at speed 1, for the income shown.
 pub const TICKS_PER_SECOND: i64 = 30;
 
-const PAD: f32 = 8.0;
+pub(crate) const PAD: f32 = 8.0;
 /// The font's scale for labels and for small print.
-const BIG: f32 = 2.0;
-const SMALL: f32 = 1.0;
-const LINE: f32 = 20.0;
-const BUTTON_H: f32 = 40.0;
-const GAP: f32 = 6.0;
+pub(crate) const BIG: f32 = 2.0;
+pub(crate) const SMALL: f32 = 1.0;
+pub(crate) const LINE: f32 = 20.0;
+pub(crate) const BUTTON_H: f32 = 40.0;
+pub(crate) const GAP: f32 = 6.0;
 /// How many ticks back the income is measured over.
 const INCOME_TICKS: u32 = 60;
 
-const BACK: [u8; 4] = [30, 32, 38, 255];
-const EDGE: [u8; 4] = [70, 74, 84, 255];
-const BUTTON: [u8; 4] = [46, 50, 60, 255];
-const PICKED: [u8; 4] = [70, 96, 140, 255];
-const INK: [u8; 4] = [225, 225, 215, 255];
-const DIM: [u8; 4] = [150, 150, 140, 255];
-const BAR: [u8; 4] = [210, 180, 70, 255];
+pub(crate) const BACK: [u8; 4] = [30, 32, 38, 255];
+pub(crate) const EDGE: [u8; 4] = [70, 74, 84, 255];
+pub(crate) const BUTTON: [u8; 4] = [46, 50, 60, 255];
+pub(crate) const PICKED: [u8; 4] = [70, 96, 140, 255];
+pub(crate) const INK: [u8; 4] = [225, 225, 215, 255];
+pub(crate) const DIM: [u8; 4] = [150, 150, 140, 255];
+pub(crate) const BAR: [u8; 4] = [210, 180, 70, 255];
 /// The ghost of a structure being placed, where it can stand and where it can't.
 pub const GOOD: [u8; 4] = [70, 200, 90, 255];
 pub const BAD: [u8; 4] = [210, 60, 50, 255];

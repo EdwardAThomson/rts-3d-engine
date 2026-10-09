@@ -124,7 +124,7 @@ for (const run of runs) {
     if (m.text().startsWith("drawing with")) drawing = m.text();
     if (m.type() === "error") errors.push(m.text());
   });
-  await page.goto(`${base}/web/play3d/?seed=1&speed=8`);
+  await page.goto(`${base}/web/play3d/?seed=1&speed=8&menu=0`);
   const titled = (re) => page.waitForFunction((s) => new RegExp(s).test(document.title), re.source, { timeout: 30_000 })
     .then(() => true, () => false);
   const ticking = await titled(/tick ([2-9]\d|\d\d\d)/);
@@ -167,6 +167,17 @@ for (const run of runs) {
   await page.waitForTimeout(300);
   const zoomed = await frame(page, run);
   if (zoomed.png) writeFileSync(`${out}/play3d-${run.name}-zoomed.png`, zoomed.png);
+  // Without menu=0 the page opens on the main menu. Skirmish opens the setup, the players' button steps on and Start
+  // begins the game.
+  await page.goto(`${base}/web/play3d/?seed=2`);
+  const menu = await titled(/main menu/);
+  await page.locator("#game").focus();
+  await page.mouse.click(480, 286);
+  const setup = await titled(/skirmish setup, seed 2, 2 players/);
+  await page.mouse.click(621, 449);
+  const stepped = await titled(/skirmish setup, seed 2, 3 players/);
+  await page.mouse.click(621, 553);
+  const started = await titled(/tick ([1-9]\d)/);
   const checks = {
     [`drew with ${run.backend}`]: drawing.includes(`(${run.backend},`),
     "the game ticks": ticking,
@@ -179,6 +190,10 @@ for (const run of runs) {
     "the panel turns the helper off": helperOff,
     "M mutes": muted,
     "a control group comes back": recalled,
+    "the page opens on the main menu": menu,
+    "Skirmish opens the setup": setup,
+    "a setup button steps on": stepped,
+    "Start begins the game": started,
     "the wheel zooms": zoomed.colours >= 64 && zoomed.print !== shot.print,
     "no errors": errors.length === 0,
   };

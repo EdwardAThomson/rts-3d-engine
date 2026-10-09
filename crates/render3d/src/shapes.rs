@@ -1,7 +1,8 @@
 //! What to draw, as boxes in view space. Every unit is a box the size of its body (a disc's square for a mobile
 //! unit, the footprint for a structure, the height from its type), carrying its kind and which way it faces, so the
-//! renderer can draw the kind's model there instead when it has one. Mobile units and projectiles slide between their positions at the last two ticks, so motion is smooth at
-//! any frame rate while the simulation keeps its fixed tick.
+//! renderer can draw the kind's model there instead when it has one. Mobile units slide between their positions at
+//! the last two ticks, so motion is smooth at any frame rate while the simulation keeps its fixed tick. Shots are
+//! drawn by `shots`, as effects.
 
 use std::collections::BTreeMap;
 
@@ -28,7 +29,6 @@ pub enum Part {
     Unit(u32),
     /// A structure still being built: drawn pale, as tall as it is finished.
     Frame(u32),
-    Projectile(u32),
     Wreck(u32),
     /// A resource spot, by cell.
     Spot(i32, i32),
@@ -70,10 +70,6 @@ impl Shape {
     }
 }
 
-/// Size of a projectile's box, in cells.
-const SHOT: f32 = 0.12;
-/// Projectiles' colour.
-const SHOT_COLOUR: [u8; 4] = [255, 230, 150, 255];
 const WRECK_COLOUR: [u8; 4] = [70, 66, 60, 255];
 /// How tall a structure's wreck is, as a share of the structure.
 pub const WRECK_SHARE: f32 = 0.35;
@@ -185,12 +181,6 @@ impl Shapes {
                     unit: Some(Pose { kind: u.kind, structure: false, yaw, aim: self.aim(world, u, yaw), grown: 1.0 }),
                 });
             }
-        }
-        for s in world.projectiles() {
-            let p = between(to_view(s.at((s.flown - 1).max(0))), to_view(s.at(s.flown)), alpha);
-            let h = SHOT / 2.0;
-            let (min, max) = ([p[0] - h, p[1] - h, p[2] - h], [p[0] + h, p[1] + h, p[2] + h]);
-            out.push(Shape::plain(Part::Projectile(s.id), min, max, SHOT_COLOUR));
         }
         out
     }

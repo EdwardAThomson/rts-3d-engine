@@ -11,10 +11,11 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 2. **What to draw is worked out without a GPU.** `Shapes` turns the world into boxes in view space, so the rules
    for what appears where are tested with no adapter. A mobile unit is a box the size of its disc and as tall as its
    type; a structure covers exactly the cells the simulation blocks; a frame is pale and grows with the work done
-   on it; projectiles, wrecks and resource spots have boxes of their own. Players' colours are generic, by owner
+   on it; wrecks and resource spots have boxes of their own. Shots are effects (rule 12). Players' colours are generic, by owner
    number.
-3. **Smooth at any frame rate.** The simulation keeps its fixed tick. Mobile units and projectiles slide from where
-   they were at the tick before to where they are now, so the picture runs one tick behind the state.
+3. **Smooth at any frame rate.** The simulation keeps its fixed tick. Mobile units slide from where they were at
+   the tick before to where they are now, and shots fly along their own path (rule 12), so the picture runs one
+   tick behind the state.
 4. **One pass.** The terrain mesh (at the level of detail the camera asks for, kept once made) and then every box
    as an instance of one cube, over a depth buffer, lit by one low sun from the west-north-west. Faint lines along
    the cell edges are draped over the ground, so its shape reads from any angle even where hills are gentle; they
@@ -31,7 +32,7 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    to its target. Team paint, baked grey, is multiplied by the owner's colour. A frame is the finished model, pale,
    rising from the ground as it is built. A wreck is its unit's model, burnt dark and squashed to a third of its
    height: a structure's over the footprint it still blocks, a mobile unit's as a low heap at its own angle, which
-   ground units ride up over rather than through. Kinds with no model, shots and resource spots stay boxes. Textures
+   ground units ride up over rather than through. Kinds with no model and resource spots stay boxes. Textures
    get mipmaps so small far-off units don't shimmer. WebGL2 can't offset indices per draw, so each model's
    indices count from the start of its own buffer.
 7. **Playing goes through `control`, with no GPU.** Selecting and ordering are worked out from the world, the
@@ -62,7 +63,8 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    layout follows the classic 1990s sidebar. Like `control`, what a click does is worked out with no GPU.
 9. **Effects come from `events`.** `effects` turns each tick's events into soft round blobs that face the camera
    (`Puff`), worked out with no GPU from the time since the event: a flash at the muzzle when a unit fires, a burst
-   of fire and dust where a shot lands (bigger for a shell with splash), a blast where a unit is destroyed (bigger
+   of fire and dust where a shot lands (bigger for a shell with splash, lifted so the ground doesn't cut its glow
+   off in a line) with a few sparks thrown out and falling back, a blast where a unit is destroyed (bigger
    for a building), and smoke rising from every wreck, a vehicle's for 8 seconds and a building's for 30, with fire
    at a building's foot for the first third; smoke stops when the wreck is cleared. The renderer draws them last,
    tested against depth so hills and models hide them, without writing it; fire and flashes add light, smoke
@@ -77,6 +79,29 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    on screen they happen. The sound card (the `sound` feature, on by default) opens at the start on the desktop and
    on the first click or key in the browser, which only allows sound after one; with no sound card the viewer is
    silent. M mutes.
+11. **Menus first, as in any strategy game; the game-over panel in the panel's place.** `menu` draws over the whole
+   screen with the same batch and font as the panel. The main menu comes first: the title and a centred column of
+   Skirmish, Campaign and Load game, and Quit on the desktop (a browser tab has nothing to quit). Campaign and Load
+   game are shown greyed out with "not yet" until the engine has campaigns and saved games. Skirmish (or Enter)
+   opens the skirmish setup: a framed window in which the scene shows the map the options make, turning slowly
+   (`Renderer::set_area_at` puts the scene's viewport anywhere on the screen), and buttons two by two for the map
+   seed (1 to 999), the number of players (2 to 4), the helper and watching only, each stepping on with a click and
+   back with a right-click, then Back (or Escape) and Start (or Enter). When one side is left, the game-over panel
+   takes the side panel's place beside the battlefield: who won, how long it took, and what each side built and
+   lost (`menu::Tally`, counted from `Built` and `Destroyed` events), with Play again (the same options, or Enter)
+   and Menu (back to the main menu). Clicks and keys are worked out with no GPU.
+12. **Shots are drawn as what they are.** `shots` draws every projectile in flight, in the look the setting gives
+   its unit kind (`assets/skirmish/shots.json`): a tracer is a bright streak, hottest at its head and fading back
+   along its path; a shell is a glowing round with a faint smoke trail; a missile is a dark body with a flame at
+   its tail and a thick smoke trail, with smoke billowing round the launcher. A kind the setting leaves out gets a
+   shell if its weapon lobs and a tracer if not. In the skirmish tanks fire tracers and the artillery, whose model
+   is a rocket launcher, fires missiles. A shot's flight is a closed form of the time since it was fired
+   (`sim3d::weapon`), so `shots` rebuilds it from the `Fired` event and works it out again in floats at any
+   fraction of a tick: the head is exactly where the simulation has the shot, and the trail lies along the path it
+   really flew, left every tick or half tick and hanging in the air for a second after the shot lands. A `Puff`
+   with a `stretch` is a streak: the shader lays a capsule along the stretch as the camera sees it, so end on it is
+   a round blob. Like the other effects these only read; tracers and smoking rocket trails are the genre's usual
+   look, and the code and numbers are ours.
 
 ## The viewer
 
@@ -84,6 +109,7 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
 cargo run --release -p render3d --bin play3d -- --seed 1 --players 2
 ```
 
+It opens on the main menu (rule 11); the command line's options fill it in, and `--menu 0` (`?menu=0`) skips it.
 You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) against computer players. Left-click
 a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
 to attack it or the ground to move there, with Ctrl held to attack-move. Double-click a unit to select all of its
@@ -112,17 +138,19 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 `wasm-bindgen` is the command-line tool of the same version as the library in `Cargo.lock`. CI runs
 `web/play3d/check.mjs` in headless Chromium on both WebGPU and WebGL2: the game ticks, the frame shows the map,
 Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
-Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, and the
-wheel zooms. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
+Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, the
+wheel zooms, and, with the menus on, the page opens on the main menu, Skirmish opens the setup, a button steps on and Start
+begins the game. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
 store; that is still open.
 
 ## Later
 
+- Campaigns and saved games, which the main menu already lists as "not yet".
 - Control groups that a browser's own Ctrl+number shortcuts don't swallow; a rally point with several legs, or
   one that attack-moves.
 - Icons when zoomed far out; the detailed models close in.
 - Models for other settings, read from a setting pack instead of built into the program.
 - Sounds and effects from a setting pack instead of made in code; music.
-- Real projectiles in place of the small boxes that stand in for shots today: a tracer for a gun, a shell with a
-  smoke trail for artillery (Ed, 8 Oct 2026: fine as placeholders, not for the real thing).
+- Shot looks and impact effects from a setting pack's own art (sprites or models) on top of the three made in
+  code; a scorch mark left on the ground where shells land; a launch sound for missiles.
 - Units tilted to the slope they stand on; today a level box sinks into a hillside.

@@ -23,8 +23,8 @@ const VERTEX: u64 = 24;
 const INSTANCE: u64 = 28;
 /// Bytes per overlay rectangle: its corners in clip space and a colour.
 const FLAT: u64 = 20;
-/// Bytes per effect blob: its centre and radius, a colour and how much it glows.
-const PUFF: u64 = 24;
+/// Bytes per effect blob: its centre and radius, a colour, how much it glows, and its stretch for a streak.
+const PUFF: u64 = 36;
 
 /// The direction towards the sun: low in the west-north-west, so slopes facing away from it fall into shade and
 /// hills read as hills.
@@ -56,8 +56,9 @@ pub struct Renderer {
     /// Effect blobs drawn from the next frame on, and their buffer.
     puffs: Vec<Puff>,
     puff_buffer: Option<wgpu::Buffer>,
-    /// The part of the target the scene fills, from its top left, when it leaves room for a panel; see `set_area`.
-    area: Option<(u32, u32)>,
+    /// The part of the target the scene fills (left, top, width, height) when it leaves room for a panel or a menu;
+    /// see `set_area`.
+    area: Option<[u32; 4]>,
 }
 
 impl Renderer {
@@ -177,7 +178,7 @@ impl Renderer {
             cache: None,
         });
         // Effects blend premultiplied colour over the scene, tested against depth but never writing it.
-        let puff = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Unorm8x4];
+        let puff = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Unorm8x4, 3 => Float32x3];
         let puff_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("effects"),
             layout: Some(&layout),
@@ -269,6 +270,11 @@ impl Renderer {
     /// already there (the sky included), so a panel drawn beside it first is kept; `None` fills and clears the
     /// whole target again.
     pub fn set_area(&mut self, area: Option<(u32, u32)>) {
+        self.area = area.map(|(w, h)| [0, 0, w, h]);
+    }
+
+    /// Like `set_area`, but the scene's rectangle can be anywhere on the target: `[left, top, width, height]`.
+    pub fn set_area_at(&mut self, area: Option<[u32; 4]>) {
         self.area = area;
     }
 
@@ -287,7 +293,12 @@ impl Renderer {
     ) {
         let map = world.map();
         let (target_size, area) = ((width, height), self.area);
-        let (width, height) = area.map_or((width, height), |(w, h)| (w.clamp(1, width), h.clamp(1, height)));
+        // The area, kept inside the target.
+        let area = area.map(|[x, y, w, h]| {
+            let (x, y) = (x.min(width - 1), y.min(height - 1));
+            [x, y, w.clamp(1, width - x), h.clamp(1, height - y)]
+        });
+        let (width, height) = area.map_or((width, height), |[_, _, w, h]| (w, h));
         let mut globals = Vec::with_capacity(80);
         for column in camera.view_proj(map, width as f32 / height as f32) {
             for f in column {
@@ -373,9 +384,9 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if area.is_some() {
-                pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
-                pass.set_scissor_rect(0, 0, width, height);
+            if let Some([x, y, w, h]) = area {
+                pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+                pass.set_scissor_rect(x, y, w, h);
             }
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_pipeline(&self.terrain_pipeline);
@@ -434,6 +445,9 @@ impl Renderer {
             }
             bytes.extend_from_slice(&p.colour);
             bytes.extend_from_slice(&[(p.glow.clamp(0.0, 1.0) * 255.0) as u8, 0, 0, 0]);
+            for f in p.stretch {
+                bytes.extend_from_slice(&f.to_le_bytes());
+            }
         }
         if self.puff_buffer.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
             self.puff_buffer = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {

@@ -144,8 +144,8 @@ fn effects_draw_as_glowing_and_smoky_blobs_over_the_scene() {
     let mut renderer = Renderer::new(&gpu, OFFSCREEN_FORMAT);
     let shapes = Shapes::default().shapes(&world, 1.0);
     let plain = renderer.draw_to_image(&gpu, (w, h), &world, &camera, &shapes, [20, 24, 32]);
-    let fire = Puff { at: [10.0, 12.0, 0.3], radius: 0.6, colour: [255, 140, 50, 255], glow: 1.0 };
-    let smoke = Puff { at: [14.0, 12.0, 0.3], radius: 0.6, colour: [40, 40, 40, 200], glow: 0.0 };
+    let fire = Puff::round([10.0, 12.0, 0.3], 0.6, [255, 140, 50, 255], 1.0);
+    let smoke = Puff::round([14.0, 12.0, 0.3], 0.6, [40, 40, 40, 200], 0.0);
     renderer.set_effects(&[fire, smoke]);
     let image = renderer.draw_to_image(&gpu, (w, h), &world, &camera, &shapes, [20, 24, 32]);
     let px = |img: &[u8], p: [f32; 3]| {

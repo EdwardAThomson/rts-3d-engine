@@ -1,7 +1,8 @@
-//! Effects drawn from the world's `events`: a flash at the muzzle when a unit fires, a burst where a shot lands
-//! (bigger for a shell with splash), a blast where a unit is destroyed, and smoke rising from wrecks, with fire at
-//! the foot of a fallen building's for a while. A building going up also shakes the view for a moment (`shake`). Each is a handful of soft round blobs that face the camera
-//! (`Puff`), worked out with no GPU from the time since the event, so they are tested on their own. Like everything
+//! Effects drawn from the world's `events`: a flash at the muzzle when a unit fires, the shot itself in flight with
+//! its trail (`shots`), a burst with sparks where it lands (bigger for a shell with splash), a blast where a unit is
+//! destroyed, and smoke rising from wrecks, with fire at the foot of a fallen building's for a while. A building
+//! going up also shakes the view for a moment (`shake`). Each is a handful of soft blobs and streaks that face the
+//! camera (`Puff`), worked out with no GPU from the time since the event, so they are tested on their own. Like everything
 //! here they only read: nothing in `events` feeds back into the state. Sprite-particle effects of this kind are the
 //! genre's usual way; the code and numbers are ours.
 
@@ -10,6 +11,8 @@ use std::collections::BTreeMap;
 use sim3d::world::{Event, World};
 use view3d::maths::V3;
 use view3d::to_view;
+
+use crate::shots::{Flights, Looks};
 
 /// One soft round blob, facing the camera.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,6 +24,21 @@ pub struct Puff {
     pub colour: [u8; 4],
     /// 1 for light that brightens what is behind it (fire, flashes), 0 for smoke that covers it.
     pub glow: f32,
+    /// For a streak, from `at` to its other end; zero for a round blob. A streak is drawn as a capsule `radius` wide,
+    /// brightest at `at` and fading towards the other end.
+    pub stretch: V3,
+}
+
+impl Puff {
+    /// A round blob.
+    pub fn round(at: V3, radius: f32, colour: [u8; 4], glow: f32) -> Puff {
+        Puff { at, radius, colour, glow, stretch: [0.0; 3] }
+    }
+
+    /// A streak from `at` along `stretch`.
+    pub fn streak(at: V3, radius: f32, colour: [u8; 4], glow: f32, stretch: V3) -> Puff {
+        Puff { at, radius, colour, glow, stretch }
+    }
 }
 
 /// How long each effect lasts, in ticks.
@@ -35,6 +53,8 @@ const PUFF_LIFE: f32 = 75.0;
 /// How long the ground shakes after a building goes up, in ticks, and how far off it is felt, in cells.
 pub const SHAKE_TICKS: f32 = 24.0;
 const SHAKE_REACH: f32 = 24.0;
+/// Sparks thrown out where a shot lands.
+const SPARKS: u32 = 5;
 /// The most effects kept at once; the oldest go first.
 const MAX_LIVE: usize = 2000;
 
@@ -78,13 +98,22 @@ pub struct Effects {
     splash: BTreeMap<u32, i32>,
     /// Buildings that went up lately, which shake the view: where, when and how big.
     quakes: Vec<(V3, f32, f32)>,
+    /// Shots in flight and the trails they leave.
+    flights: Flights,
 }
 
 impl Effects {
+    /// Effects with shots drawn in the setting's looks; `Effects::default()` gives every shot the look its weapon
+    /// suggests.
+    pub fn with_looks(looks: Looks) -> Effects {
+        Effects { flights: Flights::new(looks), ..Effects::default() }
+    }
+
     /// Start the effects for the events of the tick just stepped; `world` is the state after it.
     pub fn observe(&mut self, world: &World, events: &[Event]) {
         // The picture runs a tick behind the state, so what happened in this step shows from the last tick on.
         let born = world.tick() as f32 - 1.0;
+        self.flights.observe(world, events);
         for e in events {
             match *e {
                 Event::Fired { unit, projectile, from, .. } => {
@@ -149,7 +178,7 @@ impl Effects {
 
     /// How many effects and smoking wrecks are playing.
     pub fn len(&self) -> usize {
-        self.live.len() + self.smoke.len()
+        self.live.len() + self.smoke.len() + self.flights.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -172,6 +201,7 @@ impl Effects {
         for s in &self.smoke {
             smoke(s, now, &mut out);
         }
+        self.flights.puffs(now, &mut out);
         let d2 = |p: &Puff| (0..3).map(|i| (p.at[i] - eye[i]).powi(2)).sum::<f32>();
         out.sort_by(|a, b| d2(b).total_cmp(&d2(a)));
         out
@@ -203,41 +233,35 @@ fn alpha(a: f32) -> u8 {
 fn draw(e: &Effect, t: f32, out: &mut Vec<Puff>) {
     let [x, y, z] = e.at;
     match e.kind {
-        Kind::Flash => out.push(Puff {
-            at: e.at,
-            radius: 0.22 * (1.0 - 0.5 * t),
-            colour: [255, 235, 170, alpha(1.0 - t)],
-            glow: 1.0,
-        }),
+        Kind::Flash => out.push(Puff::round(e.at, 0.22 * (1.0 - 0.5 * t), [255, 235, 170, alpha(1.0 - t)], 1.0)),
         Kind::Burst { size } => {
-            out.push(Puff { at: e.at, radius: size * (0.5 + t), colour: [255, 160, 60, alpha(1.0 - t)], glow: 1.0 });
+            // Lifted by most of its radius, so the ground doesn't cut its glow off in a hard line.
+            let radius = size * (0.4 + 0.8 * t);
+            out.push(Puff::round([x, y, z + 0.8 * radius], radius, [255, 160, 60, alpha(1.0 - t)], 1.0));
             let dust = [x, y, z + 0.3 * size * t];
-            out.push(Puff {
-                at: dust,
-                radius: size * (0.6 + 1.2 * t),
-                colour: [125, 110, 95, alpha(0.55 * (1.0 - t))],
-                glow: 0.0,
-            });
+            out.push(Puff::round(dust, size * (0.6 + 1.2 * t), [125, 110, 95, alpha(0.55 * (1.0 - t))], 0.0));
+            // Sparks thrown out and falling back, each a short streak pointing back along its path.
+            for k in 0..SPARKS {
+                let turn = std::f32::consts::TAU * (k as f32 + hash(e.seed, k + 31)) / SPARKS as f32;
+                let reach = 0.3 + 0.4 * size;
+                let (out_by, up_by) = ((0.5 + hash(e.seed, k + 37)) * reach, (0.4 + hash(e.seed, k + 41)) * reach);
+                let spark = |t: f32| {
+                    [x + turn.cos() * out_by * t, y + turn.sin() * out_by * t, z + up_by * 4.0 * t * (1.0 - t)]
+                };
+                let (head, tail) = (spark(t), spark((t - 0.06).max(0.0)));
+                let back = [tail[0] - head[0], tail[1] - head[1], tail[2] - head[2]];
+                out.push(Puff::streak(head, 0.02, [255, 215, 140, alpha(1.2 * (1.0 - t))], 1.0, back));
+            }
         }
         Kind::Blast { size } => {
             for k in 0..5u32 {
                 let (dx, dy) = (hash(e.seed, k) - 0.5, hash(e.seed, k + 7) - 0.5);
                 let spread = size * (0.3 + t);
                 let at = [x + dx * spread, y + dy * spread, z + size * (0.2 + 0.6 * t * hash(e.seed, k + 13))];
-                out.push(Puff {
-                    at,
-                    radius: size * (0.35 + 0.7 * t),
-                    colour: [255, 125, 45, alpha(1.0 - t)],
-                    glow: 1.0,
-                });
+                out.push(Puff::round(at, size * (0.35 + 0.7 * t), [255, 125, 45, alpha(1.0 - t)], 1.0));
             }
             let at = [x, y, z + size * (0.3 + t)];
-            out.push(Puff {
-                at,
-                radius: size * (0.8 + 1.4 * t),
-                colour: [55, 50, 46, alpha(0.7 * (1.0 - t))],
-                glow: 0.0,
-            });
+            out.push(Puff::round(at, size * (0.8 + 1.4 * t), [55, 50, 46, alpha(0.7 * (1.0 - t))], 0.0));
         }
     }
 }
@@ -264,12 +288,12 @@ fn smoke(s: &Smoke, now: f32, out: &mut Vec<Puff>) {
             s.at[2] + s.size * (0.2 + 3.0 * u),
         ];
         let a = 0.6 * (1.0 - u) * (0.3 + 0.7 * left) * (u * 8.0).min(1.0);
-        out.push(Puff { at, radius: s.size * (0.3 + 0.9 * u), colour: [72, 70, 68, alpha(a)], glow: 0.0 });
+        out.push(Puff::round(at, s.size * (0.3 + 0.9 * u), [72, 70, 68, alpha(a)], 0.0));
     }
     // A fallen building burns at its foot for the first third of its smoke.
     if s.building && left > 0.66 {
         let flicker = 0.75 + 0.25 * hash(s.wreck, now as u32);
         let at = [s.at[0], s.at[1], s.at[2] + 0.15 * s.size];
-        out.push(Puff { at, radius: 0.45 * s.size * flicker, colour: [255, 120, 40, alpha(0.7 * flicker)], glow: 1.0 });
+        out.push(Puff::round(at, 0.45 * s.size * flicker, [255, 120, 40, alpha(0.7 * flicker)], 1.0));
     }
 }

@@ -1,9 +1,17 @@
 //! The viewer: a generic skirmish in a window, with you playing the first side (blue) against computer players.
 //!   cargo run --release -p render3d --bin play3d -- [--seed 1] [--players 2] [--speed 1] [--frames N] [--watch 1]
-//!       [--boxes 1] [--helper 0]
+//!       [--boxes 1] [--helper 0] [--menu 0]
 //!
 //! The same program runs in the browser (`web/play3d/`, see docs/render.md), drawing with WebGPU or WebGL2 into the
 //! page's canvas, with the options in the page address instead: `?seed=3&players=4&speed=8`.
+//!
+//! It opens on the main menu (see `menu`): Skirmish, Campaign and Load game (both greyed out until the engine has
+//! them) and, on the desktop, Quit. Skirmish (or Enter) opens the skirmish setup, centred on the screen: the map the
+//! options make turning in a window, and buttons for the map's seed, the number of players, the helper and watching
+//! only, then Back (or Escape) and Start (or Enter). The options given on the
+//! command line or in the address fill the menu, and `--menu 0` skips it and starts straight away. When one side is
+//! left the panel shows who won, how long it took and what each side built and lost, with buttons (or Enter) to
+//! play the same game again or go back to the main menu.
 //!
 //! Left-click a unit of yours to select it, or drag a box round several; shift adds to the selection. Right-click an
 //! enemy to attack it or the ground to move there; with Ctrl held, they attack-move and fight on the way. A computer
@@ -35,7 +43,9 @@ use std::time::Duration;
 use ai3d::{Ai, Settings, skirmish};
 use render3d::control::{CLICK, Control, Screen, outline};
 use render3d::effects::Effects;
+use render3d::menu::{self, Menu, Options, Pressed, Tally};
 use render3d::panel::{self, Clicked, Names, Panel};
+use render3d::shots::Looks;
 use render3d::sound::Sounds;
 use render3d::{Renderer, Shapes};
 use rts_platform::audio::Mixer;
@@ -61,6 +71,10 @@ const SPEEDS: [u32; 6] = [1, 2, 4, 8, 16, 32];
 const SKY: [u8; 3] = [20, 24, 32];
 /// Two clicks, or two presses of a group's number, this close together are a double.
 const DOUBLE: Duration = Duration::from_millis(400);
+/// Radians a second the map in the skirmish setup's window turns.
+const SHOWCASE_TURN: f32 = 0.12;
+/// How far in the map in the skirmish setup's window is seen, as the camera's zoom.
+const SHOWCASE_ZOOM: f32 = 0.9;
 /// Share of the screen panned per second, and radians turned per second.
 const PAN: f32 = 0.8;
 const TURN: f32 = 1.6;
@@ -98,6 +112,16 @@ struct Running {
 }
 
 struct App {
+    /// In the menus, with the world the setup's options make shown in its window, rather than playing.
+    in_menu: bool,
+    menu: Menu,
+    /// Quit was chosen on the main menu; the program leaves after this frame.
+    quit: bool,
+    /// The options the game being played was started with, for playing it again.
+    options: Options,
+    tally: Tally,
+    /// The seed and players of the map shown beside the menu, while it shows one.
+    showing: Option<(i32, u8)>,
     world: World,
     /// Every player's number.
     players: Vec<u8>,
@@ -138,23 +162,27 @@ struct App {
 }
 
 impl App {
-    fn new(seed: i32, players: u8, watch: bool) -> App {
-        let world = skirmish::skirmish(seed, players);
+    fn new(options: Options, in_menu: bool) -> App {
         let mut mixer = Mixer::new(48_000);
         let sounds = Sounds::new(&mut mixer);
+        let world = skirmish::skirmish(options.seed, options.players);
         let camera = Camera::new(world.map());
         let names = Names {
             kinds: skirmish::KINDS.iter().map(|k| k.to_string()).collect(),
             resources: skirmish::RESOURCES.iter().map(|r| r.to_string()).collect(),
         };
-        let mut panel = Panel::new(names);
-        panel.helper = !arg("helper").is_some_and(|h| h == "0");
-        App {
-            players: (0..players).collect(),
-            ais: (0..players).map(|p| Ai::new(p, Settings::normal())).collect(),
-            control: (!watch).then(|| Control::new(0)),
-            panel,
-            effects: Effects::default(),
+        let mut app = App {
+            in_menu,
+            quit: false,
+            menu: Menu::new(options, cfg!(not(target_arch = "wasm32"))),
+            options,
+            tally: Tally::default(),
+            showing: in_menu.then_some((options.seed, options.players)),
+            players: Vec::new(),
+            ais: Vec::new(),
+            control: None,
+            panel: Panel::new(names),
+            effects: Effects::with_looks(Looks::skirmish()),
             mixer: Arc::new(Mutex::new(mixer)),
             sounds,
             #[cfg(feature = "sound")]
@@ -182,6 +210,68 @@ impl App {
             winner: None,
             frames: 0,
             max_frames: arg("frames").and_then(|s| s.parse().ok()),
+        };
+        if in_menu {
+            app.showing = None;
+            app.showcase();
+        } else {
+            app.begin(options);
+        }
+        app
+    }
+
+    /// Start a new game with these options, leaving the menu.
+    fn begin(&mut self, options: Options) {
+        let Options { seed, players, helper, watch } = options;
+        self.in_menu = false;
+        self.showing = None;
+        self.options = options;
+        self.world = skirmish::skirmish(seed, players);
+        self.camera = Camera::new(self.world.map());
+        self.players = (0..players).collect();
+        self.ais = (0..players).map(|p| Ai::new(p, Settings::normal())).collect();
+        self.control = (!watch).then(|| Control::new(0));
+        self.panel = Panel::new(self.panel.names.clone());
+        self.panel.helper = helper;
+        self.effects = Effects::with_looks(Looks::skirmish());
+        self.shapes = Shapes::default();
+        self.tally = Tally::default();
+        (self.winner, self.paused, self.owed, self.looking) = (None, false, Duration::ZERO, false);
+        (self.last_click, self.last_group) = (None, None);
+    }
+
+    /// Back to the main menu, with the map the options make ready for the skirmish setup.
+    fn back_to_menu(&mut self) {
+        self.in_menu = true;
+        self.menu.page = menu::Page::Main;
+        self.control = None;
+        self.winner = None;
+        self.showcase();
+    }
+
+    /// The map the menu's options make, to show in the menu's window, unless it is already the one shown.
+    fn showcase(&mut self) {
+        let Options { seed, players, .. } = self.menu.options;
+        if self.showing != Some((seed, players)) {
+            self.showing = Some((seed, players));
+            self.world = skirmish::skirmish(seed, players);
+            // Partly zoomed in, so the map is seen at a slant as it turns.
+            self.camera = Camera::new(self.world.map());
+            self.camera.zoom = SHOWCASE_ZOOM;
+            self.camera.settle(self.world.map());
+            self.shapes = Shapes::default();
+            self.effects = Effects::with_looks(Looks::skirmish());
+        }
+    }
+
+    /// What the menu or the game-over panel asked for.
+    fn pressed(&mut self, p: Pressed) {
+        match p {
+            Pressed::Nothing => {}
+            Pressed::Start => self.begin(self.menu.options),
+            Pressed::Again => self.begin(self.options),
+            Pressed::Menu => self.back_to_menu(),
+            Pressed::Quit => self.quit = true,
         }
     }
 
@@ -190,6 +280,10 @@ impl App {
         let now = Instant::now();
         let elapsed = now - self.last;
         self.last = now;
+        if self.in_menu {
+            self.camera.rotate(SHOWCASE_TURN * elapsed.as_secs_f32());
+            return 1.0;
+        }
         if self.paused || self.winner.is_some() {
             return 1.0;
         }
@@ -210,6 +304,7 @@ impl App {
             self.shapes.remember(&self.world);
             let events = self.world.step();
             self.effects.observe(&self.world, &events);
+            self.tally.observe(&self.world, &events);
             if let Some(control) = &mut self.control {
                 control.observe(&self.world, &events);
             }
@@ -230,6 +325,15 @@ impl App {
     }
 
     fn title(&self) -> String {
+        if self.in_menu {
+            let o = self.menu.options;
+            return match self.menu.page {
+                menu::Page::Main => "3D RTS viewer: main menu".into(),
+                menu::Page::Skirmish => {
+                    format!("3D RTS viewer: skirmish setup, seed {}, {} players", o.seed, o.players)
+                }
+            };
+        }
         let state = match (self.winner, self.paused) {
             (Some(p), _) if self.control.as_ref().is_some_and(|c| c.player == p) => ", you won".into(),
             (Some(_), _) if self.control.is_some() => ", you lost".into(),
@@ -294,6 +398,16 @@ impl App {
         let _ = first;
     }
 
+    /// Who won, once the game is over.
+    fn headline(&self) -> Option<String> {
+        let p = self.winner?;
+        Some(match &self.control {
+            Some(c) if c.player == p => "YOU WON".into(),
+            Some(_) => "YOU LOST".into(),
+            None => format!("PLAYER {p} WON"),
+        })
+    }
+
     /// The game's state for the foot of the panel.
     fn state(&self) -> Vec<String> {
         let seconds = self.world.tick() / panel::TICKS_PER_SECOND as u32;
@@ -334,6 +448,7 @@ impl App {
         self.steer(1.0 / 60.0);
         let title = self.title();
         let state = self.state();
+        let headline = self.headline();
         let mut shapes = self.shapes.shapes(&self.world, alpha);
         let Some(screen) = self.screen() else { return };
         let scene = self.panel.layout(screen).scene;
@@ -361,7 +476,15 @@ impl App {
             seen.focus[0] += shake * (now * 2.1).sin();
             seen.focus[1] += shake * (now * 2.9 + 1.0).cos();
         }
-        run.renderer.set_area(Some((scene.width as u32, scene.height as u32)));
+        // On the main menu there is no scene to draw.
+        let scene_shown = !(self.in_menu && self.menu.page == menu::Page::Main);
+        if self.in_menu {
+            // The map turns in the skirmish setup's window.
+            let p = menu::title_layout(screen).preview;
+            run.renderer.set_area_at(Some([p.x as u32, p.y as u32, p.w as u32, p.h as u32]));
+        } else {
+            run.renderer.set_area(Some((scene.width as u32, scene.height as u32)));
+        }
         let texture = match run.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -372,17 +495,26 @@ impl App {
         };
         let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let size = (run.config.width, run.config.height);
-        // The panel first, over the sky, then the scene beside it.
-        let control = self.control.as_ref();
-        self.panel.draw(&run.gpu, &mut run.batch, &run.font, &self.world, control, &self.camera, screen, &state);
+        // The menus over the whole screen, or the game-over panel or the panel down the right, first; then the scene
+        // beside the panel or in the skirmish setup's window.
+        if self.in_menu {
+            self.menu.draw(&mut run.batch, &run.font, screen);
+        } else if let Some(headline) = headline {
+            menu::draw_over(&mut run.batch, &run.font, screen, &headline, &self.world, &self.players, &self.tally);
+        } else {
+            let control = self.control.as_ref();
+            self.panel.draw(&run.gpu, &mut run.batch, &run.font, &self.world, control, &self.camera, screen, &state);
+        }
         run.batch.draw(&run.gpu, &view, size.0, size.1, [SKY[0], SKY[1], SKY[2], 255]);
-        run.renderer.draw(&run.gpu, &view, size, &self.world, &seen, &shapes, SKY);
+        if scene_shown {
+            run.renderer.draw(&run.gpu, &view, size, &self.world, &seen, &shapes, SKY);
+        }
         run.gpu.queue.present(texture);
         run.window.set_title(&title);
         #[cfg(target_arch = "wasm32")]
         rts_platform::web::set_title(&title);
         self.frames += 1;
-        if self.max_frames.is_some_and(|m| self.frames >= m) {
+        if self.quit || self.max_frames.is_some_and(|m| self.frames >= m) {
             event_loop.exit();
         }
     }
@@ -424,6 +556,16 @@ impl App {
     fn click(&mut self, button: MouseButton, state: ElementState) {
         self.open_speaker();
         let Some(screen) = self.screen() else { return };
+        // The menu and the game-over panel take clicks on the panel's place.
+        let on_panel = self.mouse.0 >= self.panel.layout(screen).scene.width;
+        if state == ElementState::Pressed && (self.in_menu || (self.winner.is_some() && on_panel)) {
+            let p = match self.in_menu {
+                true => self.menu.click(self.mouse, screen, button == MouseButton::Right),
+                false => menu::over_click(self.mouse, screen),
+            };
+            self.pressed(p);
+            return;
+        }
         let Some(control) = &mut self.control else { return };
         let scene = self.panel.layout(screen).scene;
         if state == ElementState::Released {
@@ -487,6 +629,15 @@ impl App {
 
     fn key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
         self.open_speaker();
+        if matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) {
+            if self.in_menu {
+                let p = self.menu.enter();
+                self.pressed(p);
+            } else if self.winner.is_some() {
+                self.pressed(Pressed::Again);
+            }
+            return;
+        }
         if let Some(n) = digit(code) {
             self.group(n);
             return;
@@ -498,6 +649,7 @@ impl App {
                 }
             }
             KeyCode::Escape if self.panel.placing.is_some() => self.panel.placing = None,
+            KeyCode::Escape if self.in_menu && self.menu.back() => {}
             KeyCode::Escape if cfg!(not(target_arch = "wasm32")) => event_loop.exit(),
             KeyCode::Space => self.paused = !self.paused,
             KeyCode::Equal | KeyCode::NumpadAdd => self.speed = (self.speed + 1).min(SPEEDS.len() - 1),
@@ -649,6 +801,17 @@ impl ApplicationHandler for App {
     }
 }
 
+/// The options given on the command line or in the page address, for the menu or a game started straight away.
+fn options() -> Options {
+    let d = Options::default();
+    Options {
+        seed: arg("seed").and_then(|s| s.parse().ok()).filter(|s| (1..=menu::SEEDS).contains(s)).unwrap_or(d.seed),
+        players: arg("players").and_then(|s| s.parse().ok()).filter(|p| menu::PLAYERS.contains(p)).unwrap_or(d.players),
+        helper: !arg("helper").is_some_and(|h| h == "0"),
+        watch: arg("watch").is_some_and(|w| w != "0"),
+    }
+}
+
 /// Point the camera at a point on the map, in cells.
 fn look(camera: &mut Camera, world: &World, [x, y]: [f32; 2]) {
     camera.focus = [x, y, 0.0];
@@ -657,10 +820,7 @@ fn look(camera: &mut Camera, world: &World, [x, y]: [f32; 2]) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    let seed = arg("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
-    let players = arg("players").and_then(|s| s.parse().ok()).unwrap_or(2);
-    let watch = arg("watch").is_some_and(|w| w != "0");
-    let mut app = App::new(seed, players, watch);
+    let mut app = App::new(options(), !arg("menu").is_some_and(|m| m == "0"));
     let event_loop = EventLoop::new().expect("an event loop (is there a display?)");
     event_loop.run_app(&mut app).expect("the event loop runs");
     println!("quit at tick {} after {} frames, winner {:?}", app.world.tick(), app.frames, app.winner);
@@ -671,8 +831,6 @@ fn main() {
     use winit::platform::web::EventLoopExtWebSys;
     rts_platform::web::report_panics();
     rts_platform::web::status("loading");
-    let seed = arg("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
-    let players = arg("players").and_then(|s| s.parse().ok()).unwrap_or(2);
-    let watch = arg("watch").is_some_and(|w| w != "0");
-    EventLoop::new().expect("an event loop").spawn_app(App::new(seed, players, watch));
+    let in_menu = !arg("menu").is_some_and(|m| m == "0");
+    EventLoop::new().expect("an event loop").spawn_app(App::new(options(), in_menu));
 }
