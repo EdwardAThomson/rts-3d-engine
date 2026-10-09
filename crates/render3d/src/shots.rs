@@ -83,7 +83,7 @@ const STREAK_TICKS: f32 = 1.4;
 const SHELL_TRAIL: f32 = 18.0;
 const SHELL_EVERY: f32 = 1.0;
 const MISSILE_EVERY: f32 = 0.5;
-const MISSILE_TRAIL: f32 = 30.0;
+const MISSILE_TRAIL: f32 = 40.0;
 /// How long the smoke at a missile's launch lasts, in ticks.
 const LAUNCH_SMOKE: f32 = 20.0;
 /// The most shots followed at once; the oldest go first.
@@ -238,18 +238,20 @@ fn draw(f: &Flight, head: f32, age: f32, flying: bool, out: &mut Vec<Puff>) {
                 let u = age / LAUNCH_SMOKE;
                 let from = place(p, 0.0);
                 let at = [from[0], from[1], from[2] + 0.15 * u];
-                out.push(Puff::round(at, 0.15 + 0.3 * u, [190, 186, 180, alpha(0.5 * (1.0 - u))], 0.0));
+                out.push(Puff::round(at, 0.2 + 0.35 * u, [200, 196, 190, alpha(0.7 * (1.0 - u))], 0.0));
             }
             trail(f, head, age, (MISSILE_EVERY, MISSILE_TRAIL), out, |u| {
                 let thick = (u * 6.0).min(1.0);
-                (0.07 + 0.16 * u, [205, 202, 196, alpha(0.4 * (1.0 - u) * thick)], 0.12 * u)
+                (0.1 + 0.2 * u, [232, 230, 225, alpha(0.7 * (1.0 - u) * thick)], 0.12 * u)
             });
             if flying {
-                let tail = place(p, (head - 0.8).max(0.0));
-                let flame = place(p, (head - 1.0).max(0.0));
+                let tail = place(p, (head - 1.2).max(0.0));
+                let flame = place(p, (head - 1.4).max(0.0));
                 let flicker = 0.8 + 0.2 * ((age * 7.3).sin() * 0.5 + 0.5);
-                out.push(Puff::round(flame, 0.11 * flicker, [255, 175, 80, 230], 1.0));
-                out.push(Puff::streak(at, 0.05, [70, 70, 74, 255], 0.0, minus(tail, at)));
+                // A wide orange glow round the exhaust and a white-hot core, so the missile reads from far off.
+                out.push(Puff::round(flame, 0.26 * flicker, [255, 140, 50, 200], 1.0));
+                out.push(Puff::round(flame, 0.1 * flicker, [255, 245, 215, 255], 1.0));
+                out.push(Puff::streak(at, 0.07, [60, 60, 64, 255], 0.0, minus(tail, at)));
             }
         }
     }
