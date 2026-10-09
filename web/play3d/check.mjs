@@ -172,7 +172,7 @@ for (const run of runs) {
   await page.goto(`${base}/web/play3d/?seed=2`);
   const menu = await titled(/main menu/);
   await page.locator("#game").focus();
-  await page.mouse.click(480, 238);
+  await page.mouse.click(480, 286);
   const setup = await titled(/skirmish setup, seed 2, 2 players/);
   await page.mouse.click(621, 449);
   const stepped = await titled(/skirmish setup, seed 2, 3 players/);

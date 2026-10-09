@@ -128,7 +128,7 @@ const MAIN_W: f32 = 320.0;
 pub fn main_layout(screen: Screen, quit: bool) -> Vec<(Entry, Px)> {
     let w = MAIN_W.min(screen.width - 2.0 * PAD).max(1.0);
     let x = (screen.width - w) / 2.0;
-    let top = main_title(screen) + Font::height(TITLE) + GAP + Font::height(BIG) + 6.0 * GAP;
+    let top = main_title(screen) + heading_height() + 2.0 * BELOW_HEADING;
     let entries: &[Entry] = if quit {
         &[Entry::Skirmish, Entry::Campaign, Entry::Load, Entry::Quit]
     } else {
@@ -139,6 +139,15 @@ pub fn main_layout(screen: Screen, quit: bool) -> Vec<(Entry, Px)> {
         .enumerate()
         .map(|(i, &e)| (e, Px::new(x, top + i as f32 * (BUTTON_H + 2.0 * GAP), w, BUTTON_H)))
         .collect()
+}
+
+/// Room between the title and the line under it, and below that line before what follows, in pixels.
+const UNDER_TITLE: f32 = 18.0;
+const BELOW_HEADING: f32 = 36.0;
+
+/// How tall the title and the line under it are together.
+fn heading_height() -> f32 {
+    Font::height(TITLE) + UNDER_TITLE + Font::height(BIG)
 }
 
 /// The top of the main menu's title: a fifth of the way down.
@@ -164,8 +173,8 @@ pub struct TitleLayout {
 pub fn title_layout(screen: Screen) -> TitleLayout {
     let w = COLUMN.min(screen.width - 2.0 * PAD).max(1.0);
     let x = (screen.width - w) / 2.0;
-    let title = (screen.height * 0.05).max(PAD);
-    let under = title + Font::height(TITLE) + GAP + Font::height(BIG) + 2.0 * GAP;
+    let title = (screen.height * 0.07).max(3.0 * PAD);
+    let under = title + heading_height() + BELOW_HEADING;
     let buttons = 2.0 * (BUTTON_H + GAP) + 2.0 * GAP + BUTTON_H + 2.0 * GAP + Font::height(SMALL) + PAD;
     let preview_h = (screen.height - under - buttons - 2.0 * GAP).max(BUTTON_H);
     let preview = Px::new(x, under, w, preview_h);
@@ -276,7 +285,7 @@ impl Menu {
         let centred = |text: &str, scale: f32| (screen.width - Font::width(text, scale)) / 2.0;
         let heading = |batch: &mut SpriteBatch, top: f32, under: &str| {
             font.draw(batch, "3D RTS", centred("3D RTS", TITLE), top, TITLE, BAR);
-            font.draw(batch, under, centred(under, BIG), top + Font::height(TITLE) + GAP, BIG, INK);
+            font.draw(batch, under, centred(under, BIG), top + Font::height(TITLE) + UNDER_TITLE, BIG, INK);
         };
         if self.page == Page::Main {
             heading(batch, main_title(screen), "A REAL-TIME STRATEGY ENGINE");
