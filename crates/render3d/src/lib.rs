@@ -3,8 +3,9 @@
 //!
 //! - `control`: playing one side with the mouse: selecting, and orders from where the cursor points.
 //! - `effects`: flashes, bursts, blasts and smoke from the world's events, as soft blobs facing the camera.
+//! - `shots`: shots in flight in the setting's looks (tracers, shells, missiles) with the trails they leave.
 //! - `shapes`: what to draw, as plain boxes in view space, worked out from the world with no GPU, so it is tested on
-//!   its own. Units, structures and frames, projectiles, wrecks and resource spots each get a box.
+//!   its own. Units, structures and frames, wrecks and resource spots each get a box.
 //! - `model`: the art studio's models read from glTF files, and where each is drawn over its unit's shape. `json`
 //!   reads their headers.
 //! - `menu`: the main menu and the skirmish setup, centred, and the game-over panel in the side panel's place.
@@ -24,6 +25,7 @@ mod model_gpu;
 pub mod panel;
 pub mod renderer;
 pub mod shapes;
+pub mod shots;
 pub mod sound;
 
 pub use renderer::Renderer;

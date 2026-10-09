@@ -1,0 +1,7 @@
+{
+  "about": "How each unit kind's shots look in flight (render3d::shots). tracer: a bright streak; shell: a glowing round with a faint smoke trail; missile: a dark body with a flame at its tail and a thick smoke trail. A kind not named here gets a shell if its weapon lobs, otherwise a tracer. The artillery's model is a rocket launcher, so it fires missiles.",
+  "kinds": {
+    "tank": "tracer",
+    "artillery": "missile"
+  }
+}

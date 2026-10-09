@@ -143,15 +143,19 @@ fn fs_model(in: Model) -> @location(0) vec4<f32> {
     return vec4<f32>(colour * light, 1.0);
 }
 
-// Effects: soft round blobs of light, fire and smoke, each a quad turned to face the camera and blended over the
-// scene. They are tested against the depth buffer, so hills and models hide them, but don't write to it.
+// Effects: soft blobs of light, fire and smoke, each a quad turned to face the camera and blended over the scene.
+// A blob with a stretch is a streak: a capsule from its centre to centre + stretch, laid across the screen along
+// the stretch as the camera sees it and fading towards its far end. They are tested against the depth buffer, so
+// hills and models hide them, but don't write to it.
 struct Puff {
     @builtin(position) clip: vec4<f32>,
-    // From -1 to 1 across the quad.
+    // Across the quad in radii: x along the streak (0 at its middle), y across it, both -1 to 1 for a round blob.
     @location(0) at: vec2<f32>,
     @location(1) colour: vec4<f32>,
     // 1 for a glow that brightens what is behind it, 0 for smoke that covers it.
     @location(2) glow: f32,
+    // Half the streak's length in radii; 0 for a round blob.
+    @location(3) half: f32,
 };
 
 @vertex
@@ -161,25 +165,42 @@ fn vs_puff(
     @location(1) colour: vec4<f32>,
     // x: the glow; the rest pad it to four bytes.
     @location(2) glow: vec4<f32>,
+    @location(3) stretch: vec3<f32>,
 ) -> Puff {
     // The same six corners as the overlay's.
     let x = select(-1.0, 1.0, ((0x32u >> i) & 1u) == 1u);
     let y = select(-1.0, 1.0, ((0x2cu >> i) & 1u) == 1u);
     // centre.w is the blob's radius in cells.
-    let world = centre.xyz + (globals.right.xyz * x + globals.up.xyz * y) * centre.w;
+    let r = centre.w;
+    // The stretch as the camera sees it, in its right and up directions.
+    let seen = vec2<f32>(dot(stretch, globals.right.xyz), dot(stretch, globals.up.xyz));
+    let long = length(seen);
+    var along = vec2<f32>(1.0, 0.0);
+    if (long > 0.0001) {
+        along = seen / long;
+    }
+    let side = vec2<f32>(-along.y, along.x);
+    let half = 0.5 * long;
+    // x = -1 is the head's end, a radius past the centre.
+    let q = along * x * (half + r) + side * y * r;
+    let world = centre.xyz + 0.5 * stretch + globals.right.xyz * q.x + globals.up.xyz * q.y;
     var out: Puff;
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
-    out.at = vec2<f32>(x, y);
+    out.at = vec2<f32>(x * (half + r) / r, y);
     out.colour = colour;
     out.glow = glow.x;
+    out.half = half / r;
     return out;
 }
 
 @fragment
 fn fs_puff(in: Puff) -> @location(0) vec4<f32> {
-    let d = length(in.at);
+    let d = length(vec2<f32>(max(abs(in.at.x) - in.half, 0.0), in.at.y));
     let soft = 1.0 - smoothstep(0.35, 1.0, d);
-    let a = in.colour.a * soft;
+    // A streak fades from its head (x < 0) to its far end.
+    let toward_tail = clamp((in.at.x + in.half) / (2.0 * in.half + 0.0001), 0.0, 1.0);
+    let fade = 1.0 - 0.75 * toward_tail * step(0.001, in.half);
+    let a = in.colour.a * soft * fade;
     if (a < 0.004) {
         discard;
     }

@@ -45,6 +45,7 @@ use render3d::control::{CLICK, Control, Screen, outline};
 use render3d::effects::Effects;
 use render3d::menu::{self, Menu, Options, Pressed, Tally};
 use render3d::panel::{self, Clicked, Names, Panel};
+use render3d::shots::Looks;
 use render3d::sound::Sounds;
 use render3d::{Renderer, Shapes};
 use rts_platform::audio::Mixer;
@@ -181,7 +182,7 @@ impl App {
             ais: Vec::new(),
             control: None,
             panel: Panel::new(names),
-            effects: Effects::default(),
+            effects: Effects::with_looks(Looks::skirmish()),
             mixer: Arc::new(Mutex::new(mixer)),
             sounds,
             #[cfg(feature = "sound")]
@@ -232,7 +233,7 @@ impl App {
         self.control = (!watch).then(|| Control::new(0));
         self.panel = Panel::new(self.panel.names.clone());
         self.panel.helper = helper;
-        self.effects = Effects::default();
+        self.effects = Effects::with_looks(Looks::skirmish());
         self.shapes = Shapes::default();
         self.tally = Tally::default();
         (self.winner, self.paused, self.owed, self.looking) = (None, false, Duration::ZERO, false);
@@ -259,7 +260,7 @@ impl App {
             self.camera.zoom = SHOWCASE_ZOOM;
             self.camera.settle(self.world.map());
             self.shapes = Shapes::default();
-            self.effects = Effects::default();
+            self.effects = Effects::with_looks(Looks::skirmish());
         }
     }
 

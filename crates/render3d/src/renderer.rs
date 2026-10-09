@@ -23,8 +23,8 @@ const VERTEX: u64 = 24;
 const INSTANCE: u64 = 28;
 /// Bytes per overlay rectangle: its corners in clip space and a colour.
 const FLAT: u64 = 20;
-/// Bytes per effect blob: its centre and radius, a colour and how much it glows.
-const PUFF: u64 = 24;
+/// Bytes per effect blob: its centre and radius, a colour, how much it glows, and its stretch for a streak.
+const PUFF: u64 = 36;
 
 /// The direction towards the sun: low in the west-north-west, so slopes facing away from it fall into shade and
 /// hills read as hills.
@@ -178,7 +178,7 @@ impl Renderer {
             cache: None,
         });
         // Effects blend premultiplied colour over the scene, tested against depth but never writing it.
-        let puff = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Unorm8x4];
+        let puff = wgpu::vertex_attr_array![0 => Float32x4, 1 => Unorm8x4, 2 => Unorm8x4, 3 => Float32x3];
         let puff_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("effects"),
             layout: Some(&layout),
@@ -445,6 +445,9 @@ impl Renderer {
             }
             bytes.extend_from_slice(&p.colour);
             bytes.extend_from_slice(&[(p.glow.clamp(0.0, 1.0) * 255.0) as u8, 0, 0, 0]);
+            for f in p.stretch {
+                bytes.extend_from_slice(&f.to_le_bytes());
+            }
         }
         if self.puff_buffer.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
             self.puff_buffer = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
