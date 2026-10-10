@@ -36,7 +36,7 @@ impl Game {
 
     /// The person orders `unit` somewhere, taking it from the helper.
     fn order(&mut self, command: Command) {
-        self.claimed.insert(render3d::control::unit_of(&command));
+        self.claimed.extend(render3d::control::units_of(&command));
         self.journal.command(self.world.tick(), command.clone());
         self.world.command(command);
     }
@@ -101,13 +101,24 @@ fn every_command_reads_back_from_its_text() {
         Command::FallBack { unit: 7, percent: 30, x: 8, y: 9 },
         Command::Rally { unit: 3, point: Some((100, 200)) },
         Command::Rally { unit: 3, point: None },
+        Command::Formation { units: vec![4, 9, 12], x: 640, y: -3, hunt: true },
+        Command::Formation { units: vec![4], x: 0, y: 0, hunt: false },
     ];
     for c in all {
         let text = command_text(&c);
         assert_eq!(parse_command(&text).as_ref(), Ok(&c), "{text}");
     }
     assert_eq!(command_text(&Command::Build { unit: 2, kind: FACTORY, cx: 1, cy: 2 }), "build 2 factory 1 2");
-    for bad in ["", "fly 1 2 3", "move 1 2", "move a 2 3", "produce 3 spaceship 0", "produce 3 tank 2"] {
+    for bad in [
+        "",
+        "fly 1 2 3",
+        "move 1 2",
+        "formation 1 2 0",
+        "formation 1 2 3 4",
+        "move a 2 3",
+        "produce 3 spaceship 0",
+        "produce 3 tank 2",
+    ] {
         assert!(parse_command(bad).is_err(), "{bad:?}");
     }
 }

@@ -1,7 +1,7 @@
 //! Factories and fighters. Each finished factory keeps its queue topped up: builders until the player has
 //! `builders` of them, then fighters, taking turns between the kinds it can build. New fighters gather at a rally
 //! point between home and the nearest enemy it knows of. Enemy fighters near the base draw out every fighter at home. Once
-//! enough have gathered they set out together as a wave, attack-moving on the nearest enemy structure and then on
+//! enough have gathered they set out together as a wave, in formation, attack-moving on the nearest enemy structure and then on
 //! whatever enemy is nearest each of them, until the wave is beaten down and comes home. Each wave is bigger than
 //! the last.
 
@@ -87,9 +87,9 @@ pub(crate) fn think(ai: &mut Ai, world: &World, out: &mut Vec<Command>) {
         let target = nearest(&enemies, rally, |e| is_structure(&types[e.kind]))
             .or_else(|| nearest(&enemies, rally, |_| true))
             .map_or_else(|| scout(ai, world), |e| e.pos);
-        for u in &free {
-            out.push(attack(u, target));
-        }
+        // The wave sets out in formation, fighting what it meets on the way.
+        let (x, y) = approach(world, target, rally);
+        out.push(Command::Formation { units: free.iter().map(|u| u.id).collect(), x, y, hunt: true });
         ai.wave = free.iter().map(|u| u.id).collect();
         ai.wave_start = ai.wave.len();
         ai.waves_sent += 1;
@@ -123,7 +123,9 @@ pub(crate) fn rally(ai: &Ai, world: &World) -> (i32, i32) {
 }
 
 /// Where to send a unit to reach a point: the point itself, or if a structure stands there the centre of the
-/// nearest free cell round it, nearest `from` (ties to row order).
+/// nearest free cell round it, nearest `from`. Ties go to the cell furthest clockwise of the way from `from` to `at`,
+/// then furthest along it, so a mirror-image approach picks the mirror-image cell (row order would favour one
+/// corner of the map whenever `from` lies on a diagonal).
 fn approach(world: &World, at: (i32, i32), from: (i32, i32)) -> (i32, i32) {
     let (cx, cy) = cell(at);
     if !world.is_blocked(cx, cy) {
@@ -131,7 +133,7 @@ fn approach(world: &World, at: (i32, i32), from: (i32, i32)) -> (i32, i32) {
     }
     let (w, h) = (world.map().width(), world.map().height());
     for r in 1..=4 {
-        let mut best: Option<(i64, (i32, i32))> = None;
+        let mut best: Option<(Rank, (i32, i32))> = None;
         for y in cy - r..=cy + r {
             for x in cx - r..=cx + r {
                 if (x - cx).abs().max((y - cy).abs()) != r
@@ -144,8 +146,13 @@ fn approach(world: &World, at: (i32, i32), from: (i32, i32)) -> (i32, i32) {
                     continue;
                 }
                 let p = (x * SUB + SUB / 2, y * SUB + SUB / 2);
-                if best.is_none_or(|(d, _)| dist2(p, from) < d) {
-                    best = Some((dist2(p, from), p));
+                let (way, off) = (
+                    (i64::from(at.0 - from.0), i64::from(at.1 - from.1)),
+                    (i64::from(p.0 - from.0), i64::from(p.1 - from.1)),
+                );
+                let key = (dist2(p, from), -(way.0 * off.1 - way.1 * off.0), -(way.0 * off.0 + way.1 * off.1));
+                if best.is_none_or(|(k, _)| key < k) {
+                    best = Some((key, p));
                 }
             }
         }
@@ -155,6 +162,10 @@ fn approach(world: &World, at: (i32, i32), from: (i32, i32)) -> (i32, i32) {
     }
     at
 }
+
+/// How good a free cell is to approach by, smallest first: distance, then how far clockwise of the way in and how
+/// far along it, both negated.
+type Rank = (i64, i64, i64);
 
 /// The known enemy nearest `from` among those that pass `keep`, ties to the lowest id.
 fn nearest(enemies: &[Known], from: (i32, i32), keep: impl Fn(&Known) -> bool) -> Option<Known> {

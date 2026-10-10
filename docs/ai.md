@@ -98,6 +98,14 @@ With facing and turrets (10 Oct 2026): the builder and tank turn their bodies at
 both seatings, with fog: 71 of 80 games decided, wins by corner 36 to 35 and by player 41 to 30, mean length
 about 16,500 ticks. `sim3d`'s facing tests check that turning and aiming stay exact mirror images too.
 
+Waves set out in formation (10 Oct 2026). `approach` now breaks ties between equally near free cells by which
+side of the way in they lie, not by row order, since a wave approaching from a rally point on the map's diagonal
+hit such ties often. Forty seeds, both seatings: 72 of 80 decided, mean length about 18,200 ticks. A longer run
+showed that the corner split in the forty-seed runs above was luck: over seeds 41 to 100, main before formations
+gave wins by corner 61 to 41 and formations 62 to 40. Corner 0 (north-west) has an edge we haven't traced yet;
+mirrored fights on the skirmish's hills end with different damage even with plain attack-moves, which is the first
+lead.
+
 ## Later
 
 - Sending a cheap unit to scout early, instead of the first wave doing it.

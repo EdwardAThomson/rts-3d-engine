@@ -35,7 +35,7 @@ use ai3d::{Ai, Settings};
 use rts_core::hash::hash_of;
 use sim3d::world::{Command, Event, World};
 
-use crate::control::unit_of;
+use crate::control::leave_out;
 use crate::menu::Options;
 
 /// The first line of every save, with the format's version.
@@ -108,7 +108,11 @@ pub fn tick(world: &mut World, ais: &mut [Ai], person: Option<Person>) -> Vec<Ev
             continue;
         }
         for c in ai.think(world) {
-            if helper.is_none_or(|p| !p.claimed.contains(&unit_of(&c))) {
+            let c = match helper {
+                Some(p) => leave_out(c, p.claimed),
+                None => Some(c),
+            };
+            if let Some(c) = c {
                 world.command(c);
             }
         }
@@ -297,6 +301,10 @@ pub fn command_text(c: &Command) -> String {
         Command::FallBack { unit, percent, x, y } => format!("fall_back {unit} {percent} {x} {y}"),
         Command::Rally { unit, point: Some((x, y)) } => format!("rally {unit} {x} {y}"),
         Command::Rally { unit, point: None } => format!("rally {unit} -"),
+        Command::Formation { units, x, y, hunt } => {
+            let ids: Vec<String> = units.iter().map(u32::to_string).collect();
+            format!("formation {x} {y} {} {}", u8::from(*hunt), ids.join(" "))
+        }
     }
 }
 
@@ -366,6 +374,18 @@ pub fn parse_command(text: &str) -> Result<Command, String> {
         "rally" => {
             count(3)?;
             Command::Rally { unit: unit()?, point: Some((int(1)?, int(2)?)) }
+        }
+        "formation" => {
+            if args.len() < 4 {
+                return Err(format!("formation takes a point, 0 or 1 and at least one id, not {} values", args.len()));
+            }
+            let hunt = match args[2] {
+                "0" => false,
+                "1" => true,
+                r => return Err(format!("{r:?} is not 0 or 1")),
+            };
+            let units = (3..args.len()).map(id).collect::<Result<Vec<u32>, String>>()?;
+            Command::Formation { units, x: int(0)?, y: int(1)?, hunt }
         }
         _ => return Err(format!("unknown command {name:?}")),
     })

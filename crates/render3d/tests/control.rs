@@ -106,19 +106,26 @@ fn right_clicking_the_ground_moves_the_selection_there_and_takes_it_from_the_hel
     let goal = [10.0, 12.0, 0.0];
     let at = camera.project(world.map(), goal, SCREEN.width, SCREEN.height).unwrap();
     let orders = control.order(&world, &camera, &shapes, at, SCREEN, false);
-    assert_eq!(orders.len(), 2);
-    for (c, unit) in orders.iter().zip([a, b]) {
-        let Command::Move { unit: u, x, y } = *c else { panic!("a move, not {c:?}") };
-        assert_eq!(u, unit);
-        // Within a sixteenth of a cell of the point under the cursor.
-        assert!((x - 10 * SUB).abs() <= SUB / 16 && (y - 12 * SUB).abs() <= SUB / 16, "to ({x}, {y})");
-    }
+    // Two units go in formation, to within a sixteenth of a cell of the point under the cursor.
+    let [Command::Formation { ref units, x, y, hunt: false }] = orders[..] else {
+        panic!("a formation, not {orders:?}")
+    };
+    assert_eq!(units, &[a, b]);
+    assert!((x - 10 * SUB).abs() <= SUB / 16 && (y - 12 * SUB).abs() <= SUB / 16, "to ({x}, {y})");
+    // One unit alone just moves.
+    let mut one = Control::new(0);
+    one.selected.insert(a);
+    assert!(
+        matches!(one.order(&world, &camera, &shapes, at, SCREEN, false)[..], [Command::Move { unit, .. }] if unit == a)
+    );
     // The helper may no longer order those two, but may still order the rest.
     assert!(!control.allows(&Command::Stop { unit: a }));
+    assert!(!control.allows(&Command::Formation { units: vec![a, 99], x: 0, y: 0, hunt: true }));
+    assert!(control.allows(&Command::Formation { units: vec![98, 99], x: 0, y: 0, hunt: true }));
     assert!(control.allows(&Command::Produce { unit: 99, kind: FACTORY, repeat: false }));
     // With Ctrl held the order is an attack-move.
     let fight = control.order(&world, &camera, &shapes, at, SCREEN, true);
-    assert!(fight.iter().all(|c| matches!(c, Command::AttackMove { .. })));
+    assert!(matches!(fight[..], [Command::Formation { hunt: true, .. }]));
 
     for c in orders {
         world.command(c);

@@ -79,6 +79,34 @@ pub fn bearing(dx: i32, dy: i32) -> Option<i32> {
     })
 }
 
+/// A step of `x` east and `y` south turned clockwise by `angle` angle units, as seen from above: a step east turned
+/// a quarter turn points south. Whole quarter turns are exact swaps and sign changes, and the rest of the turn is
+/// done by rotating a halving step at a time (CORDIC), so a step turned by an angle and by that angle plus half a
+/// turn come out exactly opposite.
+pub fn rotate(x: i32, y: i32, angle: i32) -> (i32, i32) {
+    let angle = angle.rem_euclid(TURN);
+    let (quarter, rest) = (angle / (TURN / 4), angle % (TURN / 4));
+    // Rotate by the rest, at most a quarter turn, in 2^-20 of a turn, with 12 extra bits of precision.
+    let (mut px, mut py, mut z) = (i64::from(x) << 12, i64::from(y) << 12, i64::from(rest) << 8);
+    for (i, step) in ATAN.iter().enumerate() {
+        let (dx, dy) = (py >> i, px >> i);
+        if z >= 0 {
+            (px, py, z) = (px - dx, py + dy, z - step);
+        } else {
+            (px, py, z) = (px + dx, py - dy, z + step);
+        }
+    }
+    // The steps stretch the vector by about 1.6468; scale back by its inverse, 39797 / 2^16, rounding to nearest.
+    let unstretch = |v: i64| ((v * 39797 + (1 << 27)) >> 28) as i32;
+    let (rx, ry) = (unstretch(px), unstretch(py));
+    match quarter {
+        0 => (rx, ry),
+        1 => (-ry, rx),
+        2 => (-rx, -ry),
+        _ => (ry, -rx),
+    }
+}
+
 /// How far `to` is from `from`, the short way round: from just over minus half a turn to half a turn. Exactly
 /// opposite counts as half a turn clockwise, so a unit and its mirror image turn the same way.
 pub fn angle_diff(from: i32, to: i32) -> i32 {
@@ -153,6 +181,26 @@ mod tests {
         assert_eq!(turn_towards(100, 4000, 50), 50);
         assert_eq!(turn_towards(4090, 20, 50), 20, "the short way, across north");
         assert_eq!(turn_towards(0, 1000, 0), 1000, "0 turns at once");
+        // Turning a step: quarter turns are exact, half a turn more is exactly opposite, and length is kept.
+        use super::rotate;
+        assert_eq!(rotate(100, 0, TURN / 4), (0, 100), "east turned clockwise points south");
+        assert_eq!(rotate(0, 100, TURN / 4), (-100, 0), "south turned clockwise points west");
+        assert_eq!(rotate(37, -12, 0), (37, -12));
+        for angle in (0..TURN).step_by(37) {
+            for (x, y) in [(500, 0), (-300, 700), (1, 1), (0, -2000)] {
+                let (a, b) = rotate(x, y, angle);
+                assert_eq!(rotate(x, y, angle + TURN / 2), (-a, -b), "{angle}");
+                let (before, after) = (i64::from(x * x + y * y), i64::from(a * a + b * b));
+                let tolerance = 4 * rts_core::imath::isqrt(before as u64) as i64 + 4;
+                assert!((after - before).abs() <= tolerance, "{x} {y} {angle}: {a} {b}");
+                if (angle % (TURN / 4) == 0 || (x, y) == (500, 0))
+                    && let Some(want) = bearing(x, y)
+                {
+                    let got = bearing(a, b).unwrap();
+                    assert!(angle_diff((want + angle) % TURN, got).abs() <= 3, "{x} {y} {angle}");
+                }
+            }
+        }
     }
 
     #[test]

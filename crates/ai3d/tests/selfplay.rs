@@ -162,7 +162,7 @@ fn two_opponents_play_the_same_game_every_time() {
 }
 
 /// Two opponents on skirmish seed 7 after 4000 ticks. Was 6c492ec4 before the skirmish had fog of war.
-const GOLDEN: &str = "21dd3999";
+const GOLDEN: &str = "46cf8311";
 
 #[test]
 fn the_command_log_replays_the_game_without_the_opponents() {

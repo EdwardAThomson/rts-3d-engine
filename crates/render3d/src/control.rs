@@ -160,7 +160,7 @@ impl Control {
 
     /// Whether the helper may give this order: not for a unit the person has taken over.
     pub fn allows(&self, command: &Command) -> bool {
-        !self.claimed.contains(&unit_of(command))
+        leave_out(command.clone(), &self.claimed).as_ref() == Some(command)
     }
 
     /// The left button went down at `(x, y)`.
@@ -264,6 +264,12 @@ impl Control {
             Some(point) => self.factories(world).map(|unit| Command::Rally { unit, point: Some(point) }).collect(),
             None => Vec::new(),
         };
+        // Two or more units sent to a point go in formation.
+        if let (None, Some((x, y)), 2..) = (enemy, goal, movers.len()) {
+            self.claimed.extend(&movers);
+            out.push(Command::Formation { units: movers, x, y, hunt: fight });
+            return out;
+        }
         for unit in movers {
             out.push(match (enemy, goal) {
                 (Some(target), _) => Command::Attack { unit, target },
@@ -403,9 +409,10 @@ fn distance(ray: &Ray, p: V3) -> f32 {
     (p[a] - ray.origin[a]) / ray.dir[a]
 }
 
-/// The unit an order is for. Every order names one.
-pub fn unit_of(command: &Command) -> u32 {
+/// The units an order is for: one, or a formation's.
+pub fn units_of(command: &Command) -> Vec<u32> {
     match *command {
+        Command::Formation { ref units, .. } => units.clone(),
         Command::Move { unit, .. }
         | Command::Stop { unit }
         | Command::Attack { unit, .. }
@@ -418,7 +425,19 @@ pub fn unit_of(command: &Command) -> u32 {
         | Command::Patrol { unit, .. }
         | Command::Keep { unit, .. }
         | Command::FallBack { unit, .. }
-        | Command::Rally { unit, .. } => unit,
+        | Command::Rally { unit, .. } => vec![unit],
+    }
+}
+
+/// An order with the `claimed` units left out of it: `None` when that leaves nobody, a formation of the rest
+/// otherwise.
+pub fn leave_out(command: Command, claimed: &BTreeSet<u32>) -> Option<Command> {
+    match command {
+        Command::Formation { units, x, y, hunt } => {
+            let units: Vec<u32> = units.into_iter().filter(|u| !claimed.contains(u)).collect();
+            (!units.is_empty()).then_some(Command::Formation { units, x, y, hunt })
+        }
+        c => units_of(&c).iter().all(|u| !claimed.contains(u)).then_some(c),
     }
 }
 

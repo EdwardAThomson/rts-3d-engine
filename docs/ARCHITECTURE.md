@@ -26,7 +26,8 @@ units per side; measurements decide whether we go further.
 | `sim3d` | The simulation: `space` (fixed-point `Vec3`, `SUB` = 256 sub-cell units per cell), `terrain` (corner heightmap, integer bilinear sampling, line of sight). | Started |
 | `sim3d` | `movement` (movement classes from data with a slope limit, climb slowdown and altitude; one flow field per class and goal cell, shared by every unit sent there) and `world` (units, commands with a replayable log, `MoveEnded` events, the tick). | Started |
 | `sim3d` | Steering in `world`: units are discs that push apart within their layer (ground or air), moving units shove idle ones aside, head-on pairs slide round each other, pushes respect slope limits, and a group packs round its goal. | Started |
-| later: movement polish | Closest-reachable fallback for unreachable goals, formations. | Planned |
+| `sim3d` | Formations in `world/formation.rs`: a group sent to a point goes in ranks across the way it goes (short-ranged fighters in front, the unarmed at the back), each member following the route shifted out to its own place, all paced to arrive together at the slowest member's speed, then facing the way they went. A member given another order leaves. The viewer sends any group this way and the computer's waves set out in formation. | Started |
+| later: movement polish | Closest-reachable fallback for unreachable goals, formation shapes to choose, turning a formation in place. | Planned |
 | `sim3d` | `weapon` (weapons from data; projectiles with a closed-form flight, straight for direct fire or a parabola for lobbed shots) and combat in `world`: unit types with health, `Attack` orders that close in until in range and in sight, shots stopped by the first hill or unit in the way, two-band splash, scatter from the seeded generator, a fixed combat order so mutual kills both land, owners, idle units picking the nearest enemy they can hit, half splash on their own side, and armour classes with each weapon's damage percent against each (0 = cannot hurt, never auto-picked), and `AttackMove` orders that halt to fight enemies met on the way and then drive on. | Started |
 | `sim3d` | Facing and turrets: every unit faces a bearing (`space::bearing`, integer angles with `TURN` = 4096 to a turn, exact under a half-turn mirror) and turns at its movement class's `turn` rate, turning in place before it drives off more than an eighth of a turn from its way. A weapon is on a turret with its own rate or fixed to the body, which then turns to aim while not driving; a shot leaves only once the gun points within a sixty-fourth of a turn of the target, and a turret swings back ahead with nothing to shoot. Structures never turn, so their guns always swing as turrets. Units start facing the middle of the map. | Started |
 | later: combat | Homing at aircraft, faster unit lookups for many projectiles. | Planned |
@@ -55,8 +56,8 @@ Agreed with Ed on 7 Oct 2026; the order can change as we learn.
    setup, textures, text, audio), now the `rts-platform` crate in the `rts-core` repository. Started: `view3d`
    (camera, terrain mesh, picking) and `render3d` (drawing the art studio's models, playing a side with the mouse
    and a side panel for building and production, effects and sound, fog of war, saved games, on the desktop and in the browser).
-6. Polish: formations, a high-ground range bonus, craters. (Saving games is done: docs/render.md, rule 14; turrets
-   and facing are done in `sim3d`.)
+6. Polish: a high-ground range bonus, craters. (Saving games is done: docs/render.md, rule 14; turrets and
+   facing, and formations, are done in `sim3d`.)
 
 ## Decisions so far
 
