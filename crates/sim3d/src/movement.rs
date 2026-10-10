@@ -36,6 +36,9 @@ pub struct MoveClass {
     /// Units are discs of this radius, in sub-cell units, and keep apart from other units in their layer. At
     /// most half a cell.
     pub radius: i32,
+    /// Angle units (`space::TURN` to a whole turn) the body turns a tick. A unit only drives on while it faces
+    /// within `world::DRIVE_ARC` of the way it is going, so a slow turner stops to turn round. 0 turns at once.
+    pub turn: i32,
 }
 
 impl MoveClass {
@@ -226,7 +229,7 @@ mod tests {
     use rts_core::imath::isqrt;
 
     fn tracked() -> MoveClass {
-        MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64 }
+        MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64, turn: 0 }
     }
 
     #[test]

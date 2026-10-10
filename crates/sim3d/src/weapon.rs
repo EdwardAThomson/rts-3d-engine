@@ -33,6 +33,11 @@ pub struct Weapon {
     /// means the weapon cannot hurt that class at all, and units never pick such a target themselves. Armour
     /// classes come from data; the engine never assumes which exist.
     pub against: Vec<i32>,
+    /// How the gun is mounted: on a turret turning this many angle units a tick on its own (0 turns at once), or,
+    /// with `None`, fixed to the body, so the whole unit turns to aim at its movement class's `turn`. A shot leaves
+    /// only once the gun points within `world::FIRE_ARC` of the target. A structure's gun swings as a turret either
+    /// way, since a structure never turns.
+    pub turret: Option<i32>,
 }
 
 impl Weapon {
@@ -133,7 +138,17 @@ mod tests {
     use super::*;
 
     fn shell(gravity: i32) -> Weapon {
-        Weapon { range: 2048, reload: 30, speed: 64, gravity, damage: 40, splash: 0, scatter: 0, against: vec![] }
+        Weapon {
+            range: 2048,
+            reload: 30,
+            speed: 64,
+            gravity,
+            damage: 40,
+            splash: 0,
+            scatter: 0,
+            against: vec![],
+            turret: Some(0),
+        }
     }
 
     #[test]

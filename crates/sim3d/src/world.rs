@@ -26,7 +26,7 @@
 
 use crate::economy::{Job, Production, Spot, Store, Structure, Wreck, affordable, paid, reclaim_time};
 use crate::movement::{FlowField, MoveClass, can_step};
-use crate::space::{SUB, Vec3};
+use crate::space::{SUB, TURN, Vec3, angle_diff, bearing, turn_towards};
 use crate::terrain::Heightmap;
 use crate::vision::{FogRules, Vision};
 use crate::weapon::{Projectile, Weapon};
@@ -210,6 +210,11 @@ pub struct Unit {
     pub fall_back: Option<(i32, i32, i32)>,
     /// A factory's rally point, where every unit it finishes heads.
     pub rally: Option<(i32, i32)>,
+    /// Which way the body faces, in angle units clockwise from north (`space::TURN` to a whole turn). Structures
+    /// face north; other units start facing the middle of the map.
+    pub facing: i32,
+    /// Which way its turret points, relative to the body: 0 points ahead.
+    pub aim: i32,
 }
 
 impl Canon for Unit {
@@ -222,10 +227,12 @@ impl Canon for Unit {
         let fall_back = self.fall_back.map(|(p, x, y)| vec![p, x, y]);
         let rally = self.rally.map(|(x, y)| vec![x, y]);
         w.object()
+            .opt("aim", (self.aim != 0).then_some(&self.aim))
             .opt("assist", self.assist.as_ref())
             .opt("build", self.build.as_ref())
             .field("chase", &self.chase)
             .field("cooldown", &self.cooldown)
+            .field("facing", &self.facing)
             .opt("fallBack", fall_back.as_ref())
             .opt("goal", goal.as_ref())
             .field("health", &self.health)
@@ -437,6 +444,11 @@ impl World {
         let t = &self.types[kind];
         let z = self.map.sample(x, y) + t.movement.altitude;
         let health = if frame { 1 } else { t.max_health };
+        let middle = (self.map.width() * SUB / 2 - x, self.map.height() * SUB / 2 - y);
+        let facing = match t.structure {
+            Some(_) => 0,
+            None => bearing(middle.0, middle.1).unwrap_or(0),
+        };
         self.units.push(Unit {
             id,
             kind,
@@ -459,6 +471,8 @@ impl World {
             keep: Vec::new(),
             fall_back: None,
             rally: None,
+            facing,
+            aim: 0,
         });
         id
     }
@@ -551,8 +565,14 @@ impl World {
                 let unit = &mut self.units[i];
                 (unit.target, unit.chase) = (found, false);
             }
-            let unit = &self.units[i];
-            let Some(target) = unit.target else { continue };
+            let unit = &mut self.units[i];
+            let Some(target) = unit.target else {
+                // Nothing to aim at: the turret swings back to point ahead.
+                if let Some(rate) = weapon.turret.or(self.types[unit.kind].structure.map(|_| 0)) {
+                    unit.aim = turn_towards(unit.aim, 0, rate);
+                }
+                continue;
+            };
             let Some(t) = self.index_of(target) else {
                 // The target is gone: the attack is over, and so is any chase.
                 let unit = &mut self.units[i];
@@ -569,6 +589,8 @@ impl World {
                 continue;
             }
             let (muzzle, middle, in_range, in_sight) = self.aim(i, t, &weapon);
+            let (me, them) = (&self.units[i], &self.units[t]);
+            let aimed = self.train(i, bearing(them.pos.x - me.pos.x, them.pos.y - me.pos.y), &weapon);
             let me = &self.units[i];
             if !(in_range && in_sight) && !me.chase {
                 // A target picked by the unit itself is dropped once it slips out of range or sight; only an
@@ -602,7 +624,7 @@ impl World {
                 me.goal = None;
                 me.rest = None;
             }
-            if me.cooldown > 0 {
+            if me.cooldown > 0 || !aimed {
                 continue;
             }
             me.cooldown = weapon.reload;
@@ -622,6 +644,31 @@ impl World {
                 v.reveal(victim, (at.x.div_euclid(SUB), at.y.div_euclid(SUB)), until);
             }
         }
+    }
+
+    /// Turn unit `i`'s gun towards bearing `want` for a tick: a turret at its own rate, or, for a gun fixed to the
+    /// body, the whole unit at its movement class's rate while it isn't driving anywhere. A structure never turns,
+    /// so its gun always swings as a turret, at once unless the weapon gives a rate. Returns whether the gun now
+    /// points within `FIRE_ARC` of `want` (always, with no bearing: the target is on top of it).
+    fn train(&mut self, i: usize, want: Option<i32>, weapon: &Weapon) -> bool {
+        let Some(want) = want else { return true };
+        let t = &self.types[self.units[i].kind];
+        let (turn, turret) = (t.movement.turn, weapon.turret.or(t.structure.map(|_| 0)));
+        let u = &mut self.units[i];
+        let gun = match turret {
+            Some(rate) => {
+                u.aim = turn_towards(u.aim, (want - u.facing).rem_euclid(TURN), rate);
+                u.facing + u.aim
+            }
+            None => {
+                let driving = u.goal.is_some() && !(u.hunt && u.target.is_some());
+                if !driving {
+                    u.facing = turn_towards(u.facing, want, turn);
+                }
+                u.facing
+            }
+        };
+        angle_diff(gun, want).abs() <= FIRE_ARC
     }
 
     /// Where unit `i` would fire from and aim at to hit unit `t`, and whether the target is in range and in
@@ -1231,6 +1278,13 @@ const FRIENDLY_SPLASH_PERCENT: i32 = 50;
 /// Idle armed units look for an enemy once every this many ticks, staggered by id.
 const SCAN_EVERY: u32 = 8;
 
+/// How far off the way it is going a unit may face and still drive on: an eighth of a turn. Past that it stops and
+/// turns first.
+pub const DRIVE_ARC: i32 = TURN / 8;
+
+/// How far off its target a gun may point and still fire: a sixty-fourth of a turn.
+pub const FIRE_ARC: i32 = TURN / 64;
+
 /// How many of the nearest enemies in range an idle unit tests for a clear shot when picking a target.
 const SIGHT_TRIES: usize = 4;
 
@@ -1289,6 +1343,19 @@ fn advance(
     unit: &mut Unit,
     goal: (i32, i32),
 ) -> Option<MoveEnd> {
+    // Face the way to the next waypoint first; a unit facing too far off it turns where it stands this tick.
+    let here = (unit.pos.x, unit.pos.y);
+    if here != goal {
+        let cell = route_cell(map, field, here);
+        let next = if cell == field.goal() { Some(goal) } else { field.next(cell).map(centre) };
+        if let Some(want) = next.and_then(|(x, y)| bearing(x - here.0, y - here.1)) {
+            unit.facing = turn_towards(unit.facing, want, class.turn);
+            if angle_diff(unit.facing, want).abs() > DRIVE_ARC {
+                unit.pos.z = map.sample(unit.pos.x, unit.pos.y) + class.altitude;
+                return None;
+            }
+        }
+    }
     let mut budget = class.speed;
     let mut first = true;
     let mut ended = None;

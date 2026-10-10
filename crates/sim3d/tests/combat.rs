@@ -14,7 +14,7 @@ const SMALL: usize = 4;
 const FRAIL_TANK: usize = 5;
 
 fn tracked(radius: i32) -> MoveClass {
-    MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius }
+    MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius, turn: 0 }
 }
 
 fn armed(max_health: i32, weapon: Weapon) -> UnitType {
@@ -31,11 +31,31 @@ fn armed(max_health: i32, weapon: Weapon) -> UnitType {
 }
 
 fn cannon() -> Weapon {
-    Weapon { range: 2048, reload: 10, speed: 128, gravity: 0, damage: 25, splash: 0, scatter: 0, against: vec![] }
+    Weapon {
+        range: 2048,
+        reload: 10,
+        speed: 128,
+        gravity: 0,
+        damage: 25,
+        splash: 0,
+        scatter: 0,
+        against: vec![],
+        turret: Some(0),
+    }
 }
 
 fn mortar(gravity: i32) -> Weapon {
-    Weapon { range: 2048, reload: 20, speed: 48, gravity, damage: 30, splash: 192, scatter: 0, against: vec![] }
+    Weapon {
+        range: 2048,
+        reload: 20,
+        speed: 48,
+        gravity,
+        damage: 30,
+        splash: 192,
+        scatter: 0,
+        against: vec![],
+        turret: Some(0),
+    }
 }
 
 fn types() -> Vec<UnitType> {
@@ -389,7 +409,7 @@ fn a_replay_of_a_battle_matches_tick_for_tick() {
         assert_eq!(hash_of(&replay).value(), *expected, "replay diverged at tick {i}");
     }
     // The golden hash pins today's combat rules. If a change moves it, say so and update it on purpose.
-    assert_eq!(hash_of(&live).hex(), "8fc93b66");
+    assert_eq!(hash_of(&live).hex(), "5b203108");
 }
 
 const LIGHT: usize = 0;

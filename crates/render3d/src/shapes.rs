@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use sim3d::space::{SUB, Vec3};
+use sim3d::space::{SUB, TURN, Vec3, angle_diff};
 use sim3d::vision::CellView;
 use sim3d::world::World;
 use view3d::maths::V3;
@@ -86,27 +86,24 @@ pub struct Shapes {
     /// The player whose view of the world is drawn under fog of war: enemies it doesn't see are left out, and the
     /// enemy structures it remembers are drawn where it last saw them. `None` draws everything.
     pub viewer: Option<u8>,
-    before: BTreeMap<u32, Vec3>,
-    /// Which way each mobile unit last moved, kept while it stands still.
-    headings: BTreeMap<u32, f32>,
+    /// Each unit's position, facing and turret angle at the last tick.
+    before: BTreeMap<u32, (Vec3, i32, i32)>,
 }
 
-/// The heading of a move from `a` to `b` (in the terms of `Shape::yaw`), if it moved at all.
-fn heading(a: Vec3, b: Vec3) -> Option<f32> {
-    let (dx, dy) = ((b.x - a.x) as f32, (b.y - a.y) as f32);
-    (dx != 0.0 || dy != 0.0).then(|| dx.atan2(-dy))
+/// A simulation angle (`sim3d::space::TURN` to a turn) in the terms of `Pose::yaw`.
+pub fn radians(angle: i32) -> f32 {
+    angle as f32 * std::f32::consts::TAU / TURN as f32
+}
+
+/// The angle `alpha` of the way from `a` to `b` the short way round, in radians.
+fn swing(a: i32, b: i32, alpha: f32) -> f32 {
+    radians(a) + radians(angle_diff(a, b)) * alpha
 }
 
 impl Shapes {
     /// Call just before each `World::step`, so the next frames can slide from these positions to the new ones.
     pub fn remember(&mut self, world: &World) {
-        for u in world.units() {
-            if let Some(h) = self.before.get(&u.id).and_then(|&b| heading(b, u.pos)) {
-                self.headings.insert(u.id, h);
-            }
-        }
-        self.headings.retain(|id, _| world.unit(*id).is_some());
-        self.before = world.units().iter().map(|u| (u.id, u.pos)).collect();
+        self.before = world.units().iter().map(|u| (u.id, (u.pos, u.facing, u.aim))).collect();
     }
 
     /// The shapes for `world`, `alpha` (0 to 1) of the way from the tick before to this one.
@@ -169,28 +166,24 @@ impl Shapes {
                 };
                 let tall = tall * grown;
                 let (min, max) = ([x0 as f32, y0 as f32, z], [x1, y1, z + tall]);
-                let aim = self.aim(world, u, 0.0);
+                let (_, aim) = self.turned(u, alpha);
                 let unit = Pose { kind: u.kind, structure: true, yaw: 0.0, aim, grown };
                 out.push(Shape { part, min, max, colour, unit: Some(unit) });
             } else {
                 let now = to_view(u.pos);
-                let mut p = self.before.get(&u.id).map_or(now, |&b| between(to_view(b), now, alpha));
+                let mut p = self.before.get(&u.id).map_or(now, |&(b, _, _)| between(to_view(b), now, alpha));
                 if t.movement.altitude == 0 {
                     p[2] += over_heaps(&heaps, p, t.movement.radius as f32 / SUB as f32);
                 }
                 let half = t.movement.radius as f32 / SUB as f32;
                 let min = [p[0] - half, p[1] - half, p[2]];
-                // A unit that has never moved faces the middle of the map, as it would set out.
-                let yaw = self.headings.get(&u.id).copied().unwrap_or_else(|| {
-                    let (w, h) = (map.width() * SUB / 2, map.height() * SUB / 2);
-                    heading(u.pos, Vec3 { x: w, y: h, z: 0 }).unwrap_or(0.0)
-                });
+                let (yaw, aim) = self.turned(u, alpha);
                 out.push(Shape {
                     part: Part::Unit(u.id),
                     min,
                     max: [p[0] + half, p[1] + half, p[2] + tall],
                     colour: [r, g, b, 255],
-                    unit: Some(Pose { kind: u.kind, structure: false, yaw, aim: self.aim(world, u, yaw), grown: 1.0 }),
+                    unit: Some(Pose { kind: u.kind, structure: false, yaw, aim, grown: 1.0 }),
                 });
             }
         }
@@ -212,9 +205,12 @@ impl Shapes {
         out
     }
 
-    /// Where a unit's turret points: at its target if it has one, otherwise the way it faces.
-    fn aim(&self, world: &World, u: &sim3d::world::Unit, yaw: f32) -> f32 {
-        u.target.and_then(|t| world.unit(t)).and_then(|t| heading(u.pos, t.pos)).unwrap_or(yaw)
+    /// Which ways a unit's body and turret face, `alpha` of the way from the tick before to this one, as the
+    /// simulation turned them.
+    fn turned(&self, u: &sim3d::world::Unit, alpha: f32) -> (f32, f32) {
+        let (facing, aim) = self.before.get(&u.id).map_or((u.facing, u.aim), |&(_, f, a)| (f, a));
+        let yaw = swing(facing, u.facing, alpha);
+        (yaw, swing(facing + aim, u.facing + u.aim, alpha))
     }
 }
 

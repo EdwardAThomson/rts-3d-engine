@@ -15,7 +15,7 @@ const SCOUT: usize = 3;
 /// work a tick, so at full speed a tank takes 100 ticks and costs 10 and 5 a tick. A source produces 5 of the first
 /// resource a tick. A scout costs nothing.
 fn types() -> Vec<UnitType> {
-    let class = |radius| MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius };
+    let class = |radius| MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius, turn: 0 };
     let unit = |radius, production| UnitType {
         movement: class(radius),
         max_health: 100,

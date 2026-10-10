@@ -52,7 +52,7 @@ const STRUCTURE_ARMOUR: usize = 1;
 ///
 /// Each also has a vision range for fog of war, set below.
 pub fn types() -> Vec<UnitType> {
-    let ground = MoveClass { speed: 24, max_slope: Some(160), climb_slowdown: 50, altitude: 0, radius: 80 };
+    let ground = MoveClass { speed: 24, max_slope: Some(160), climb_slowdown: 50, altitude: 0, radius: 80, turn: 0 };
     let fixed = MoveClass { speed: 0, ..ground.clone() };
     let structure = |width, depth| Some(Structure { width, depth, max_rise: 24 });
     let unit = |movement: MoveClass, max_health, production, structure: Option<Structure>| UnitType {
@@ -80,6 +80,7 @@ pub fn types() -> Vec<UnitType> {
         splash: 0,
         scatter: 16,
         against: vec![100, 60],
+        turret: Some(0),
     };
     let shell = Weapon {
         range: 10 * SUB,
@@ -90,6 +91,7 @@ pub fn types() -> Vec<UnitType> {
         splash: 192,
         scatter: 64,
         against: vec![100, 150],
+        turret: Some(0),
     };
     let mut types = vec![
         unit(
@@ -116,6 +118,15 @@ pub fn types() -> Vec<UnitType> {
     // so it needs others to spot for it.
     for (kind, cells) in [(BUILDER, 6), (GENERATOR, 4), (EXTRACTOR, 3), (FACTORY, 6), (TANK, 7), (ARTILLERY, 5)] {
         types[kind].vision = cells;
+    }
+    // How fast each turns, in angle units a tick (4096 to a whole turn, 30 ticks a second): the body, then the
+    // turret. A tank swings its hull round in about a second and a half and its turret in under a second; the
+    // rocket launcher is slower on both, so it is caught out by flanking.
+    for (kind, body, turret) in [(BUILDER, 48, None), (TANK, 48, Some(96)), (ARTILLERY, 32, Some(40))] {
+        types[kind].movement.turn = body;
+        if let Some(w) = &mut types[kind].weapon {
+            w.turret = turret;
+        }
     }
     types
 }

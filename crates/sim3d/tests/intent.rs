@@ -14,7 +14,7 @@ const GUNNER: usize = 2;
 /// A factory (a mobile one, for simplicity) builds scouts that cost nothing and take 50 work, at 10 a tick. A
 /// gunner has 100 health and a gun that does 10 a shot at up to 4 cells, every 10 ticks.
 fn types() -> Vec<UnitType> {
-    let class = |radius| MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius };
+    let class = |radius| MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius, turn: 0 };
     let unit = |radius, production| UnitType {
         movement: class(radius),
         max_health: 100,
@@ -34,6 +34,7 @@ fn types() -> Vec<UnitType> {
         splash: 0,
         scatter: 0,
         against: vec![],
+        turret: Some(0),
     };
     vec![
         unit(128, Production { build_power: 10, builds: vec![SCOUT, GUNNER], ..Default::default() }),
