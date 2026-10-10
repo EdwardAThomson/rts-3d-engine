@@ -41,7 +41,8 @@ fn the_main_menu_is_a_centred_column_with_quit_only_where_it_can_quit() {
         }
     }
     assert_eq!(menu::main_layout(SCREEN, false).len(), 3, "a browser tab has no Quit");
-    assert!(Entry::Skirmish.ready() && !Entry::Campaign.ready() && !Entry::Load.ready());
+    assert!(Entry::Skirmish.ready(false) && !Entry::Campaign.ready(true));
+    assert!(!Entry::Load.ready(false) && Entry::Load.ready(true), "load game once there is a save");
 }
 
 #[test]
@@ -49,11 +50,14 @@ fn the_main_menu_leads_to_the_skirmish_setup_and_back() {
     let mut menu = Menu::new(Options::default(), true);
     assert_eq!(menu.page, Page::Main);
     let at = |menu: &Menu, e: Entry| centre(menu.entries(SCREEN).into_iter().find(|(x, _)| *x == e).unwrap().1);
-    // Campaign and Load game are shown but do nothing yet.
+    // Campaign is shown but does nothing yet, and Load game nothing until there is a save.
     for e in [Entry::Campaign, Entry::Load] {
         assert_eq!(menu.click(at(&menu, e), SCREEN, false), Pressed::Nothing);
         assert_eq!(menu.page, Page::Main);
     }
+    menu.has_save = true;
+    assert_eq!(menu.click(at(&menu, Entry::Load), SCREEN, false), Pressed::Load);
+    assert_eq!(menu.click(at(&menu, Entry::Campaign), SCREEN, false), Pressed::Nothing);
     assert_eq!(menu.click(at(&menu, Entry::Quit), SCREEN, false), Pressed::Quit);
     assert_eq!(menu.click(at(&menu, Entry::Skirmish), SCREEN, false), Pressed::Nothing);
     assert_eq!(menu.page, Page::Skirmish);
@@ -131,6 +135,23 @@ fn the_game_over_panel_plays_again_or_goes_back_to_the_menu() {
     assert_eq!(menu::over_click(centre(a), SCREEN), Pressed::Again);
     assert_eq!(menu::over_click(centre(b), SCREEN), Pressed::Menu);
     assert_eq!(menu::over_click((a.x + 4.0, a.y - 20.0), SCREEN), Pressed::Nothing);
+}
+
+#[test]
+fn the_game_menu_resumes_saves_loads_and_goes_back_to_the_menu() {
+    let buttons = menu::game_buttons(SCREEN);
+    let panel = render3d::panel::layout(SCREEN, 0).panel;
+    assert_eq!(buttons.map(|(p, _)| p), [Pressed::Resume, Pressed::Save, Pressed::Load, Pressed::Menu]);
+    for pair in buttons.windows(2) {
+        assert!(pair[0].1.y + pair[0].1.h < pair[1].1.y);
+    }
+    for (pressed, r) in buttons {
+        assert!(r.x >= panel.x && r.x + r.w <= panel.x + panel.w, "in the panel's place");
+        let expect = if pressed == Pressed::Load { Pressed::Nothing } else { pressed };
+        assert_eq!(menu::game_click(centre(r), SCREEN, false), expect, "no load without a save");
+        assert_eq!(menu::game_click(centre(r), SCREEN, true), pressed);
+    }
+    assert_eq!(menu::game_click((10.0, 10.0), SCREEN, true), Pressed::Nothing, "the battlefield is not the menu");
 }
 
 #[test]

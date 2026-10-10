@@ -5,13 +5,18 @@
 //! The same program runs in the browser (`web/play3d/`, see docs/render.md), drawing with WebGPU or WebGL2 into the
 //! page's canvas, with the options in the page address instead: `?seed=3&players=4&speed=8`.
 //!
-//! It opens on the main menu (see `menu`): Skirmish, Campaign and Load game (both greyed out until the engine has
-//! them) and, on the desktop, Quit. Skirmish (or Enter) opens the skirmish setup, centred on the screen: the map the
+//! It opens on the main menu (see `menu`): Skirmish, Campaign (greyed out until the engine has campaigns), Load game
+//! (offered once there is a saved game) and, on the desktop, Quit. Skirmish (or Enter) opens the skirmish setup, centred on the screen: the map the
 //! options make turning in a window, and buttons for the map's seed, the number of players, the helper, watching
 //! only and fog of war, then Back (or Escape) and Start (or Enter). The options given on the
 //! command line or in the address fill the menu, and `--menu 0` skips it and starts straight away. When one side is
 //! left the panel shows who won, how long it took and what each side built and lost, with buttons (or Enter) to
 //! play the same game again or go back to the main menu.
+//!
+//! During a game Escape opens the game menu in the panel's place, pausing the game: Resume (or Escape, or Enter),
+//! Save game, Load game and Menu. There is one save, kept in the user's settings folder on the desktop and in the
+//! page's storage in the browser (`store`); loading plays the game forward to the saved tick and checks it came out
+//! the same (`save`).
 //!
 //! Left-click a unit of yours to select it, or drag a box round several; shift adds to the selection. Right-click an
 //! enemy to attack it or the ground to move there; with Ctrl held, they attack-move and fight on the way. A computer
@@ -32,7 +37,7 @@
 //!
 //! The mouse wheel zooms at the cursor, from a few units up to the whole map. Arrow keys or WASD pan, Q and E turn the
 //! camera, space pauses, M mutes the sound, + and - change the game speed, Home shows the whole map again and Escape
-//! quits. The title bar and the foot of the panel show the tick, the speed and the winner. `--frames N` quits after N
+//! opens the game menu (on the main menu of the desktop program, it quits). The title bar and the foot of the panel show the tick, the speed and the winner. `--frames N` quits after N
 //! frames, for smoke tests. Shots, hits and blasts make sound and draw flashes, fire and smoke (`sound`, `effects`).
 //!
 //! The simulation runs at a fixed 30 ticks a second of game time (a viewer's choice; the simulation itself has no
@@ -42,20 +47,22 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai3d::{Ai, Settings, skirmish};
+use ai3d::{Ai, skirmish};
 use render3d::control::{CLICK, Control, Screen, outline};
 use render3d::effects::Effects;
 use render3d::fog;
 use render3d::menu::{self, Menu, Options, Pressed, Tally};
 use render3d::panel::{self, Clicked, Names, Panel};
+use render3d::save::{self, Journal, Person, Save};
 use render3d::shots::Looks;
 use render3d::sound::Sounds;
+use render3d::store::Store;
 use render3d::{Renderer, Shapes};
 use rts_platform::audio::Mixer;
 use rts_platform::batch::SpriteBatch;
 use rts_platform::text::Font;
 use rts_platform::{Gpu, Instant};
-use sim3d::world::World;
+use sim3d::world::{Command, World};
 use std::sync::Mutex;
 use view3d::camera::Camera;
 use winit::application::ApplicationHandler;
@@ -132,6 +139,14 @@ struct App {
     ais: Vec<Ai>,
     /// The person's side, unless they are only watching.
     control: Option<Control>,
+    /// Everything the person has done this game, for saving it.
+    journal: Journal,
+    /// Where the saved game is kept.
+    store: Store,
+    /// Whether the game menu is open over the panel, the game paused.
+    game_menu: bool,
+    /// What the last save or load did, for the game menu.
+    notice: String,
     panel: Panel,
     effects: Effects,
     /// The sounds' mixer, shared with the sound card's thread, and the sound card once it is open.
@@ -184,6 +199,10 @@ impl App {
             players: Vec::new(),
             ais: Vec::new(),
             control: None,
+            journal: Journal::new(options.helper),
+            store: Store::user(),
+            game_menu: false,
+            notice: String::new(),
             panel: Panel::new(names),
             effects: Effects::with_looks(Looks::skirmish()),
             mixer: Arc::new(Mutex::new(mixer)),
@@ -214,6 +233,7 @@ impl App {
             frames: 0,
             max_frames: arg("frames").and_then(|s| s.parse().ok()),
         };
+        app.menu.has_save = app.store.read(save::NAME).is_some();
         if in_menu {
             app.showing = None;
             app.showcase();
@@ -225,18 +245,17 @@ impl App {
 
     /// Start a new game with these options, leaving the menu.
     fn begin(&mut self, options: Options) {
-        let Options { seed, players, helper, watch, fog } = options;
+        let Options { players, helper, watch, .. } = options;
         self.in_menu = false;
         self.showing = None;
         self.options = options;
-        self.world = skirmish::skirmish(seed, players);
-        if !fog {
-            self.world.set_fog(None);
-        }
+        self.world = save::start(&options);
         self.camera = Camera::new(self.world.map());
         self.players = (0..players).collect();
-        self.ais = (0..players).map(|p| Ai::new(p, Settings::normal())).collect();
+        self.ais = save::players(&options);
         self.control = (!watch).then(|| Control::new(0));
+        self.journal = Journal::new(helper);
+        (self.game_menu, self.notice) = (false, String::new());
         self.panel = Panel::new(self.panel.names.clone());
         self.panel.helper = helper;
         self.effects = Effects::with_looks(Looks::skirmish());
@@ -249,6 +268,7 @@ impl App {
     /// Back to the main menu, with the map the options make ready for the skirmish setup.
     fn back_to_menu(&mut self) {
         self.in_menu = true;
+        self.game_menu = false;
         self.menu.page = menu::Page::Main;
         self.control = None;
         self.winner = None;
@@ -284,7 +304,67 @@ impl App {
             Pressed::Again => self.begin(self.options),
             Pressed::Menu => self.back_to_menu(),
             Pressed::Quit => self.quit = true,
+            Pressed::Resume => self.game_menu = false,
+            Pressed::Save => {
+                self.notice = match self.save_game() {
+                    Ok(()) => {
+                        self.menu.has_save = true;
+                        let seconds = self.world.tick() / panel::TICKS_PER_SECOND as u32;
+                        format!("SAVED AT {}:{:02}", seconds / 60, seconds % 60)
+                    }
+                    Err(e) => {
+                        say(&format!("couldn't save: {e}"));
+                        "COULDN'T SAVE THE GAME".into()
+                    }
+                }
+            }
+            Pressed::Load => {
+                if let Err(e) = self.load_game() {
+                    say(&format!("couldn't load: {e}"));
+                    self.notice = "COULDN'T LOAD THE SAVED GAME".into();
+                }
+            }
         }
+    }
+
+    /// Note what the person has claimed from the helper and the helper's switch, as they stand now, in the journal.
+    fn note(&mut self) {
+        if let Some(c) = &self.control {
+            self.journal.note(self.world.tick(), &c.claimed, self.panel.helper);
+        }
+    }
+
+    /// Save the game being played, over the last save.
+    fn save_game(&mut self) -> Result<(), String> {
+        self.note();
+        let save = Save::of(self.options, &self.world, &self.journal);
+        self.store.write(save::NAME, &save.to_text())?;
+        say(&format!("saved at tick {} in {}", save.tick, self.store.describe()));
+        Ok(())
+    }
+
+    /// Load the saved game: start it again and play it forward to the tick it was saved on.
+    fn load_game(&mut self) -> Result<(), String> {
+        let text = self.store.read(save::NAME).ok_or("there is no saved game")?;
+        let save = Save::parse(&text)?;
+        let started = Instant::now();
+        let mut tally = Tally::default();
+        let loaded = save.load(|w, e| tally.observe(w, e))?;
+        say(&format!("loaded tick {} in {:.1} s", save.tick, (Instant::now() - started).as_secs_f32()));
+        self.begin(save.options);
+        self.menu.options = save.options;
+        self.world = loaded.world;
+        self.ais = loaded.ais;
+        self.journal = loaded.journal;
+        self.tally = tally;
+        self.panel.helper = loaded.helper;
+        if let Some(c) = &mut self.control {
+            c.claimed = loaded.claimed;
+        }
+        self.camera = Camera::new(self.world.map());
+        let seconds = save.tick / panel::TICKS_PER_SECOND as u32;
+        self.notice = format!("LOADED THE GAME SAVED AT {}:{:02}", seconds / 60, seconds % 60);
+        Ok(())
     }
 
     /// Run the ticks owed since the last frame; returns how far the next tick is, from 0 to 1, for sliding.
@@ -296,25 +376,17 @@ impl App {
             self.camera.rotate(SHOWCASE_TURN * elapsed.as_secs_f32());
             return 1.0;
         }
-        if self.paused || self.winner.is_some() {
+        if self.paused || self.game_menu || self.winner.is_some() {
             return 1.0;
         }
         self.owed += elapsed * SPEEDS[self.speed];
         let mut ran = 0;
         while self.owed >= TICK && ran < MAX_TICKS_PER_FRAME {
-            for ai in &mut self.ais {
-                let person = self.control.as_ref().is_some_and(|h| h.player == ai.player);
-                if !ai.due(&self.world) || (person && !self.panel.helper) {
-                    continue;
-                }
-                for c in ai.think(&self.world) {
-                    if self.control.as_ref().is_none_or(|h| h.player != ai.player || h.allows(&c)) {
-                        self.world.command(c);
-                    }
-                }
-            }
+            self.note();
             self.shapes.remember(&self.world);
-            let events = self.world.step();
+            let helper = self.panel.helper;
+            let person = self.control.as_ref().map(|c| Person { player: c.player, helper, claimed: &c.claimed });
+            let events = save::tick(&mut self.world, &mut self.ais, person);
             self.effects.observe(&self.world, &events);
             self.tally.observe(&self.world, &events);
             if let Some(control) = &mut self.control {
@@ -356,6 +428,7 @@ impl App {
             (Some(_), _) if self.control.is_some() => ", you lost".into(),
             (Some(p), _) => format!(", player {p} won"),
             (None, true) => ", paused".into(),
+            (None, false) if self.game_menu => ", game menu".into(),
             (None, false) => String::new(),
         };
         let mut selected = match &self.control {
@@ -524,6 +597,8 @@ impl App {
             self.menu.draw(&mut run.batch, &run.font, screen);
         } else if let Some(headline) = headline {
             menu::draw_over(&mut run.batch, &run.font, screen, &headline, &self.world, &self.players, &self.tally);
+        } else if self.game_menu {
+            menu::draw_game(&mut run.batch, &run.font, screen, &self.world, self.menu.has_save, &self.notice);
         } else {
             let control = self.control.as_ref();
             self.panel.draw(&run.gpu, &mut run.batch, &run.font, &self.world, control, &self.camera, screen, &state);
@@ -589,6 +664,14 @@ impl App {
             self.pressed(p);
             return;
         }
+        // The game menu takes clicks on the panel's place; the battlefield waits while it is open.
+        if self.game_menu {
+            if state == ElementState::Pressed && on_panel {
+                let p = menu::game_click(self.mouse, screen, self.menu.has_save);
+                self.pressed(p);
+            }
+            return;
+        }
         let Some(control) = &mut self.control else { return };
         let scene = self.panel.layout(screen).scene;
         if state == ElementState::Released {
@@ -599,9 +682,7 @@ impl App {
             match self.panel.click(&self.world, control, self.mouse, screen, right) {
                 Clicked::Missed => {}
                 Clicked::Orders(orders) => {
-                    for c in orders {
-                        self.world.command(c);
-                    }
+                    give(&mut self.world, &mut self.journal, orders);
                     return;
                 }
                 Clicked::Look(p) => {
@@ -619,9 +700,8 @@ impl App {
                 let ray = self.camera.ray(self.mouse.0, self.mouse.1, scene.width, scene.height);
                 if let Some(site) = self.panel.site(&self.world, &ray) {
                     let more = self.modifiers.shift_key();
-                    for c in self.panel.place(&self.world, control, site, more) {
-                        self.world.command(c);
-                    }
+                    let orders = self.panel.place(&self.world, control, site, more);
+                    give(&mut self.world, &mut self.journal, orders);
                 }
             }
             (MouseButton::Left, ElementState::Pressed) => control.press(self.mouse.0, self.mouse.1),
@@ -642,9 +722,8 @@ impl App {
             (MouseButton::Right, ElementState::Pressed) if placing => self.panel.placing = None,
             (MouseButton::Right, ElementState::Pressed) => {
                 let fight = self.modifiers.control_key();
-                for c in control.order(&self.world, &self.camera, &shapes, self.mouse, scene, fight) {
-                    self.world.command(c);
-                }
+                let orders = control.order(&self.world, &self.camera, &shapes, self.mouse, scene, fight);
+                give(&mut self.world, &mut self.journal, orders);
             }
             _ => {}
         }
@@ -656,6 +735,8 @@ impl App {
             if self.in_menu {
                 let p = self.menu.enter();
                 self.pressed(p);
+            } else if self.game_menu {
+                self.game_menu = false;
             } else if self.winner.is_some() {
                 self.pressed(Pressed::Again);
             }
@@ -673,7 +754,10 @@ impl App {
             }
             KeyCode::Escape if self.panel.placing.is_some() => self.panel.placing = None,
             KeyCode::Escape if self.in_menu && self.menu.back() => {}
-            KeyCode::Escape if cfg!(not(target_arch = "wasm32")) => event_loop.exit(),
+            KeyCode::Escape if self.in_menu && cfg!(not(target_arch = "wasm32")) => event_loop.exit(),
+            KeyCode::Escape if self.in_menu => {}
+            KeyCode::Escape if self.winner.is_some() => self.back_to_menu(),
+            KeyCode::Escape => self.game_menu = !self.game_menu,
             KeyCode::Space => self.paused = !self.paused,
             KeyCode::Equal | KeyCode::NumpadAdd => self.speed = (self.speed + 1).min(SPEEDS.len() - 1),
             KeyCode::Minus | KeyCode::NumpadSubtract => self.speed = self.speed.saturating_sub(1),
@@ -702,6 +786,14 @@ impl App {
             look(&mut self.camera, &self.world, p);
         }
         self.last_group = (!again).then_some((n, now));
+    }
+}
+
+/// Give the person's orders, keeping them in the journal for saving.
+fn give(world: &mut World, journal: &mut Journal, orders: Vec<Command>) {
+    for c in orders {
+        journal.command(world.tick(), c.clone());
+        world.command(c);
     }
 }
 

@@ -115,6 +115,7 @@ for (const run of runs) {
   const page = await browser.newPage({ viewport: { width: 960, height: 600 } });
   await page.addInitScript(readWebGpuFrames);
   const errors = [];
+  const said = [];
   let drawing = "";
   page.on("pageerror", (e) => {
     // winit hands control back to the browser by throwing; that one is expected.
@@ -122,9 +123,15 @@ for (const run of runs) {
   });
   page.on("console", (m) => {
     if (m.text().startsWith("drawing with")) drawing = m.text();
+    said.push(m.text());
     if (m.type() === "error") errors.push(m.text());
   });
   await page.goto(`${base}/web/play3d/?seed=1&speed=8&menu=0&fog=0`);
+  // The first line the game has said starting with `start`, waiting a few seconds for it; empty if none.
+  const heard = async (start) => {
+    for (let i = 0; i < 100 && !said.some((t) => t.startsWith(start)); i++) await page.waitForTimeout(100);
+    return said.find((t) => t.startsWith(start)) ?? "";
+  };
   const titled = (re) => page.waitForFunction((s) => new RegExp(s).test(document.title), re.source, { timeout: 30_000 })
     .then(() => true, () => false);
   const ticking = await titled(/tick ([2-9]\d|\d\d\d)/);
@@ -182,6 +189,19 @@ for (const run of runs) {
   await titled(/skirmish setup, seed 2, 3 players$/);
   await page.mouse.click(621, 553);
   const started = await titled(/tick ([1-9]\d)/);
+  // Escape opens the game menu in the panel's place, pausing the game. Save game keeps it in the page's storage;
+  // Menu goes back to the main menu, where Load game is now offered, and loading plays the game back to the same
+  // tick.
+  await titled(/tick ([1-9]\d\d)/);
+  await page.keyboard.press("Escape");
+  const gameMenu = await titled(/game menu/);
+  await page.mouse.click(830, 138);
+  const savedTick = ((await heard("saved at tick")).match(/saved at tick (\d+)/) ?? [])[1];
+  await page.mouse.click(830, 230);
+  await titled(/main menu/);
+  await page.mouse.click(480, 390);
+  const loaded = savedTick !== undefined && (await heard(`loaded tick ${savedTick} `)) !== ""
+    && (await titled(/^3D RTS viewer: tick \d+, speed 1x, 0 selected/));
   const checks = {
     [`drew with ${run.backend}`]: drawing.includes(`(${run.backend},`),
     "the game ticks": ticking,
@@ -199,6 +219,8 @@ for (const run of runs) {
     "a setup button steps on": stepped,
     "the fog button turns fog off": unfogged,
     "Start begins the game": started,
+    "Escape opens the game menu": gameMenu,
+    "a saved game loads from the main menu": loaded,
     "the wheel zooms": zoomed.colours >= 64 && zoomed.print !== shot.print,
     "no errors": errors.length === 0,
   };

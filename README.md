@@ -19,7 +19,7 @@ cargo run --release -p ai3d --bin selfplay -- --seeds 1..10
 with wgpu on the platform layer shared with the Classic engine (docs/render.md), with the art studio's models
 (`assets/skirmish/models/`) and shots drawn as tracers and smoking missiles (`assets/skirmish/shots.json`). Play the blue side against a computer player with the mouse, building and producing
 from the panel on the right after choosing Skirmish on the main menu and picking the map and players, with control groups and factory rally points (`--helper 0` leaves the whole side to
-you):
+you), and Escape opens a game menu to save and load:
 
 ```bash
 cargo run --release -p render3d --bin play3d -- --seed 1

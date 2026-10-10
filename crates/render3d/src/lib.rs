@@ -10,7 +10,10 @@
 //!   its own. Units, structures and frames, wrecks and resource spots each get a box.
 //! - `model`: the art studio's models read from glTF files, and where each is drawn over its unit's shape. `json`
 //!   reads their headers.
-//! - `menu`: the main menu and the skirmish setup, centred, and the game-over panel in the side panel's place.
+//! - `menu`: the main menu and the skirmish setup, centred, and the game menu and game-over panel in the side
+//!   panel's place.
+//! - `save`: saved games: the skirmish's options and what the person did, played forward again to load; and the
+//!   tick both playing and loading go through. `store` keeps the save on disk or in the browser.
 //! - `panel`: the side panel: a minimap, the side's stock, buttons for what the selection builds, and placing a
 //!   structure; drawn with the platform's sprite batch beside the scene.
 //! - `sound`: sounds made in code for shots, hits, blasts and your side's building, played through the platform's
@@ -27,9 +30,11 @@ pub mod model;
 mod model_gpu;
 pub mod panel;
 pub mod renderer;
+pub mod save;
 pub mod shapes;
 pub mod shots;
 pub mod sound;
+pub mod store;
 
 pub use renderer::Renderer;
 pub use shapes::{Shape, Shapes};
