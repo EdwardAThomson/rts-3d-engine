@@ -12,7 +12,14 @@ const AIR: usize = 1;
 fn classes() -> Vec<UnitType> {
     vec![
         UnitType {
-            movement: MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64 },
+            movement: MoveClass {
+                speed: 32,
+                max_slope: Some(64),
+                climb_slowdown: 50,
+                altitude: 0,
+                radius: 64,
+                turn: 0,
+            },
             max_health: 100,
             height: 64,
             vision: 0,
@@ -22,7 +29,7 @@ fn classes() -> Vec<UnitType> {
             structure: None,
         },
         UnitType {
-            movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: 64 },
+            movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: 64, turn: 0 },
             max_health: 100,
             height: 64,
             vision: 0,
@@ -215,7 +222,7 @@ fn a_replay_of_the_command_log_matches_tick_for_tick() {
     }
 
     // The golden hash pins today's movement rules. If a change moves it, say so and update it on purpose.
-    assert_eq!(hash_of(&live).hex(), "1159a708");
+    assert_eq!(hash_of(&live).hex(), "2467e3b8");
 }
 
 /// The move endings among a tick's events.

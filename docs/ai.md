@@ -93,6 +93,11 @@ With fog of war on (9 Oct 2026), ten seeds, both seatings: 17 of 20 games decide
 ticks; the same seeds without fog (`--fog 0`): 18 of 20, about 14,200 ticks. Finding the enemy costs the first
 wave some time; the undecided games are the same slow economic stand-offs as without fog.
 
+With facing and turrets (10 Oct 2026): the builder and tank turn their bodies at 48 a tick and the artillery at 32
+(of 4,096 to a turn), the tank's turret at 96 and the artillery's at 40, so flanking slow guns pays. Forty seeds,
+both seatings, with fog: 71 of 80 games decided, wins by corner 36 to 35 and by player 41 to 30, mean length
+about 16,500 ticks. `sim3d`'s facing tests check that turning and aiming stay exact mirror images too.
+
 ## Later
 
 - Sending a cheap unit to scout early, instead of the first wave doing it.

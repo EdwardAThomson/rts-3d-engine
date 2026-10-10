@@ -16,7 +16,7 @@ const GUNNER: usize = 3;
 /// nothing; its wreck would be worth 50. A tank's wreck is worth 300 and 120 and takes half its 400 build time, 200 work, to reclaim. A gunner
 /// kills a tank in four shots.
 fn types() -> Vec<UnitType> {
-    let ground = MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius: 64 };
+    let ground = MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius: 64, turn: 0 };
     let unit = |movement: MoveClass, production, structure| UnitType {
         movement,
         max_health: 100,
@@ -27,8 +27,17 @@ fn types() -> Vec<UnitType> {
         production,
         structure,
     };
-    let gun =
-        Weapon { range: 1536, reload: 10, speed: 128, gravity: 0, damage: 25, splash: 0, scatter: 0, against: vec![] };
+    let gun = Weapon {
+        range: 1536,
+        reload: 10,
+        speed: 128,
+        gravity: 0,
+        damage: 25,
+        splash: 0,
+        scatter: 0,
+        against: vec![],
+        turret: Some(0),
+    };
     vec![
         unit(ground.clone(), Production { build_power: 10, builds: vec![EXTRACTOR], ..Default::default() }, None),
         unit(

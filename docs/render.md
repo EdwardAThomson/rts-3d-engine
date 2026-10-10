@@ -27,9 +27,9 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    (rts-engine, `art/studio/export_gltf.py --lod low`) with a small reader of our own and `png` for the baked
    textures. Each kind of the generic skirmish has one (`assets/skirmish/models/`, listed in `models.json` by kind
    name with the source studio model). Every model is drawn at one size per metre (`metres_per_cell`, the studio's
-   10.67 metres to a tile), except that a building shrinks if it would not fit its footprint. A mobile unit faces the
-   way it last moved (the simulation keeps no facing, so `Shapes` works it out from its moves), and a turret turns
-   to its target. Team paint, baked grey, is multiplied by the owner's colour. A frame is the finished model, pale,
+   10.67 metres to a tile), except that a building shrinks if it would not fit its footprint. A unit faces the way the
+   simulation faces it and its turret points where the simulation aims it (`Unit::facing` and `Unit::aim`), both
+   swung the short way round between ticks. Team paint, baked grey, is multiplied by the owner's colour. A frame is the finished model, pale,
    rising from the ground as it is built. A wreck is its unit's model, burnt dark and squashed to a third of its
    height: a structure's over the footprint it still blocks, a mobile unit's as a low heap at its own angle, which
    ground units ride up over rather than through. Kinds with no model and resource spots stay boxes. Textures

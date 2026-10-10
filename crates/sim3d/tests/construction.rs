@@ -17,7 +17,7 @@ const TANK: usize = 4;
 /// so one builder takes 50 ticks and pays 10 a tick; once finished it produces 3 a tick. A wall is 1 cell wide
 /// and 10 deep and cannot be built, only placed. A tank's cannon takes 25 a shot.
 fn types() -> Vec<UnitType> {
-    let ground = MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius: 64 };
+    let ground = MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 0, altitude: 0, radius: 64, turn: 0 };
     let still = MoveClass { speed: 0, ..ground.clone() };
     let plain = |movement: MoveClass, max_health, production, structure| UnitType {
         movement,
@@ -29,8 +29,17 @@ fn types() -> Vec<UnitType> {
         production,
         structure,
     };
-    let cannon =
-        Weapon { range: 1536, reload: 10, speed: 128, gravity: 0, damage: 25, splash: 0, scatter: 0, against: vec![] };
+    let cannon = Weapon {
+        range: 1536,
+        reload: 10,
+        speed: 128,
+        gravity: 0,
+        damage: 25,
+        splash: 0,
+        scatter: 0,
+        against: vec![],
+        turret: Some(0),
+    };
     vec![
         plain(ground.clone(), 100, Production { build_power: 10, builds: vec![PLANT], ..Default::default() }, None),
         plain(

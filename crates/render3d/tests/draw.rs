@@ -164,6 +164,14 @@ fn shapes_cover_spots_units_frames_and_shots() {
 
     // Moving: half way through a frame the box is half way between the two ticks.
     world.command(Command::Move { unit: builder.id, x: builder.pos.x + 4 * SUB, y: builder.pos.y });
+    // It turns to face east where it stands before it sets off.
+    for _ in 0..100 {
+        if world.unit(builder.id).unwrap().pos != builder.pos {
+            break;
+        }
+        world.step();
+    }
+    let p = view3d::to_view(world.unit(builder.id).unwrap().pos);
     shapes.remember(&world);
     world.step();
     let now = view3d::to_view(world.unit(builder.id).unwrap().pos);

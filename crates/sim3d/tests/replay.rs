@@ -12,9 +12,18 @@ const TICKS: u32 = 600;
 const EVERY: u32 = 100;
 
 fn types() -> Vec<UnitType> {
-    let tracked = MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64 };
-    let gun =
-        Weapon { range: 1536, reload: 12, speed: 96, gravity: 0, damage: 20, splash: 0, scatter: 24, against: vec![] };
+    let tracked = MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: 64, turn: 0 };
+    let gun = Weapon {
+        range: 1536,
+        reload: 12,
+        speed: 96,
+        gravity: 0,
+        damage: 20,
+        splash: 0,
+        scatter: 24,
+        against: vec![],
+        turret: Some(0),
+    };
     let lob = Weapon {
         range: 2048,
         reload: 25,
@@ -24,6 +33,7 @@ fn types() -> Vec<UnitType> {
         splash: 160,
         scatter: 64,
         against: vec![],
+        turret: Some(0),
     };
     vec![
         UnitType {

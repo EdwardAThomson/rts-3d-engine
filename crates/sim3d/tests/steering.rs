@@ -11,7 +11,14 @@ const RADIUS: i32 = 64;
 fn classes() -> Vec<UnitType> {
     vec![
         UnitType {
-            movement: MoveClass { speed: 32, max_slope: Some(64), climb_slowdown: 50, altitude: 0, radius: RADIUS },
+            movement: MoveClass {
+                speed: 32,
+                max_slope: Some(64),
+                climb_slowdown: 50,
+                altitude: 0,
+                radius: RADIUS,
+                turn: 0,
+            },
             max_health: 100,
             height: 64,
             vision: 0,
@@ -21,7 +28,14 @@ fn classes() -> Vec<UnitType> {
             structure: None,
         },
         UnitType {
-            movement: MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 300, radius: RADIUS },
+            movement: MoveClass {
+                speed: 32,
+                max_slope: None,
+                climb_slowdown: 0,
+                altitude: 300,
+                radius: RADIUS,
+                turn: 0,
+            },
             max_health: 100,
             height: 64,
             vision: 0,

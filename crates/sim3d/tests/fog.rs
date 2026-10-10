@@ -19,7 +19,7 @@ const DEPOT: usize = 2;
 const TANK: usize = 3;
 
 fn ground() -> MoveClass {
-    MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 0, radius: 64 }
+    MoveClass { speed: 32, max_slope: None, climb_slowdown: 0, altitude: 0, radius: 64, turn: 0 }
 }
 
 fn unit(vision: i32, weapon: Option<Weapon>) -> UnitType {
@@ -45,6 +45,7 @@ fn gun(range: i32) -> Weapon {
         splash: 0,
         scatter: 0,
         against: vec![],
+        turret: Some(0),
     }
 }
 

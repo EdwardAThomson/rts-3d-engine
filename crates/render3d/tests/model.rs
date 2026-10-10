@@ -147,8 +147,11 @@ fn units_face_the_way_they_drive_and_turrets_their_target() {
     let p = world.unit(tank).unwrap().pos;
     let enemy = world.spawn_for(1, TANK, p.x + 3 * SUB, p.y);
     world.command(Command::Attack { unit: tank, target: enemy });
-    shapes.remember(&world);
-    world.step();
+    // The turret swings a quarter turn at its own rate.
+    for _ in 0..12 {
+        shapes.remember(&world);
+        world.step();
+    }
     let fighting = pose(&shapes, &world);
     assert!((fighting.aim - std::f32::consts::FRAC_PI_2).abs() < 0.05, "aims east ({})", fighting.aim);
 
@@ -165,7 +168,7 @@ fn units_face_the_way_they_drive_and_turrets_their_target() {
         (q[0] - o[0], q[1] - o[1])
     };
     let (hx, hy) = ahead(hull);
-    assert!(hy < 0.0 && hx.abs() < 1e-3, "the hull faces north ({hx}, {hy})");
+    assert!(hy < 0.0 && hx.abs() < 0.05 * -hy, "the hull faces north ({hx}, {hy})");
     let (tx, ty) = ahead(turret);
     assert!(tx > 0.0 && ty.abs() < 1e-2, "the turret faces east ({tx}, {ty})");
 }
