@@ -15,6 +15,7 @@ publish.workspace = true
 # crates still have no dependencies beyond rts-core.
 [dependencies]
 sim3d = { path = "../sim3d" }
+rts-core = { git = "https://github.com/EdwardAThomson/rts-core", rev = "da80e8730d22dcd6f34194787e168b565982af4c" }
 view3d = { path = "../view3d" }
 ai3d = { path = "../ai3d" }
 rts-platform = { git = "https://github.com/EdwardAThomson/rts-core", rev = "aa9c34a01b36116e2eb724b86e9a98dd39037b7a", default-features = false }
@@ -33,3 +34,5 @@ sound = ["rts-platform/device"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "30", features = ["webgl"] }
 wasm-bindgen-futures = "0.4"
+# The page's local storage, where the browser build keeps its saved game (`store`); already built for wgpu and winit.
+web-sys = { version = "0.3", features = ["Window", "Storage"] }

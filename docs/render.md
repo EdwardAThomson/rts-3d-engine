@@ -81,8 +81,8 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    silent. M mutes.
 11. **Menus first, as in any strategy game; the game-over panel in the panel's place.** `menu` draws over the whole
    screen with the same batch and font as the panel. The main menu comes first: the title and a centred column of
-   Skirmish, Campaign and Load game, and Quit on the desktop (a browser tab has nothing to quit). Campaign and Load
-   game are shown greyed out with "not yet" until the engine has campaigns and saved games. Skirmish (or Enter)
+   Skirmish, Campaign and Load game, and Quit on the desktop (a browser tab has nothing to quit). Campaign is shown
+   greyed out with "not yet" until the engine has campaigns, and Load game until there is a saved game. Skirmish (or Enter)
    opens the skirmish setup: a framed window in which the scene shows the map the options make, turning slowly
    (`Renderer::set_area_at` puts the scene's viewport anywhere on the screen), and buttons two by two for the map
    seed (1 to 999), the number of players (2 to 4), the helper and watching only, fog of war on a full-width row, each stepping on with a click and
@@ -108,6 +108,17 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    left out (`Shapes::viewer`), enemy structures the side remembers are drawn where it last saw them, effects and
    sounds out of sight are dropped, and the minimap shades fog and blacks out shroud. Watching, the menus and the
    game-over panel show everything. The setup's Fog of war button (`--fog 0`, `?fog=0`) turns fog off for a game.
+14. **Saved games replay; they are not snapshots.** `save` keeps how the skirmish was set up and everything the
+   person did, each with its tick: their commands, the units they took from the helper and the helper's switch. The
+   computer players' orders are left out: loading starts the same skirmish fresh and plays it forward, and the
+   computer players (the helper too) think again exactly as they did, so their memory comes back without being
+   saved. The state hash at the saved tick must match, so a save that doesn't reproduce its game is refused.
+   Playing and loading run each tick through the same function (`save::tick`), so they can't drift apart. The
+   file is text, one line per thing done; there is one save, kept by `store` in the user's settings folder on the
+   desktop (`~/.config/rts-3d/`) and in the page's local storage in the browser. Escape opens the game menu in the
+   panel's place, pausing the game: Resume, Save game, Load game and Menu; the main menu's Load game loads it too.
+   Loading a long game takes as long as the simulation takes to play it at full speed. The shape is the Classic
+   engine's saves (rts-engine `classic-render::save`), so both engines save the same way.
 
 ## The viewer
 
@@ -128,7 +139,7 @@ turns the helper off, so the whole side is yours, and `--helper 0` (`?helper=0`)
 (`?watch=1` in the browser) leaves every side to the computer, `--fog 0` (`?fog=0`) turns fog of war off, and `--boxes 1` draws boxes in place of the models.
 The wheel zooms at the cursor, arrow keys or WASD
 pan, Q and E turn, space pauses, + and - change the speed (1x to 32x), Home shows the whole map and Escape stops
-placing a structure, or else quits. M mutes the sound.
+placing a structure, or else opens the game menu to save, load or leave (rule 14). M mutes the sound.
 The game runs at 30 ticks a second of game time; that rate is the viewer's choice, since the simulation has no
 clock.
 
@@ -146,12 +157,15 @@ python3 -m http.server 8000      # then open http://localhost:8000/web/play3d/
 Space pauses, a drag selects, a right-click opens no browser menu, a panel button starts placing a structure and
 Escape stops it, the helper's switch turns it off, M mutes, Ctrl+1 and 1 bring a control group back, the
 wheel zooms, and, with the menus on, the page opens on the main menu, Skirmish opens the setup, a button steps on, the fog button turns fog off and Start
-begins the game. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
+begins the game; Escape opens the game menu, Save game saves, and the main menu's Load game brings the game back
+at the saved tick. Browsers on the desktop keep Ctrl and a number for switching tabs, so there a control group may not
 store; that is still open.
 
 ## Later
 
-- Campaigns and saved games, which the main menu already lists as "not yet".
+- Campaigns, which the main menu already lists as "not yet".
+- More than one save, named; saving a replay to watch; loading a long game faster from a snapshot of the world
+  (which would have to store the computer players' memory too).
 - Control groups that a browser's own Ctrl+number shortcuts don't swallow; a rally point with several legs, or
   one that attack-moves.
 - Icons when zoomed far out; the detailed models close in.

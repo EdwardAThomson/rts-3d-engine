@@ -5,8 +5,8 @@
 //!
 //! The world that `seek` returns is an ordinary game: give it new commands and it carries on from that point
 //! ("take over from replay", plans/rts-3d/improvements.md). Its command log is the replay's log up to that tick
-//! followed by the new commands, so the new line of play is itself a replay. Snapshots are kept in memory; saving
-//! them to disk comes with save games.
+//! followed by the new commands, so the new line of play is itself a replay. Snapshots are kept in memory. Saved games
+//! (render3d `save`) don't store them: a save replays from the start instead.
 
 use crate::world::{Command, World};
 use rts_core::replay::Logged;

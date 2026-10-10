@@ -1623,10 +1623,12 @@ dependencies = [
  "ai3d",
  "png",
  "pollster",
+ "rts-core",
  "rts-platform",
  "sim3d",
  "view3d",
  "wasm-bindgen-futures",
+ "web-sys",
  "wgpu",
  "winit",
 ]

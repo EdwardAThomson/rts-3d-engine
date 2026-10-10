@@ -1,12 +1,14 @@
 //! The game's menus and the game-over panel.
 //!
 //! The main menu comes first, as in any strategy game: the title and a column of choices, Skirmish, Campaign, Load
-//! game and (on the desktop) Quit. Campaign and Load game are shown but not offered yet: the engine has neither.
+//! game and (on the desktop) Quit. Campaign is shown but not offered yet, and Load game only once there is a saved
+//! game.
 //! Skirmish leads to the skirmish setup, centred too: a window onto the map the options make, turning slowly so a
 //! seed can be picked by eye, and buttons for the map's seed, how many players, whether the computer helper runs
 //! your base, and whether you play at all or only watch, then Back and Start. When one side is left the game-over panel takes
 //! the side panel's place beside the battlefield: who won, how long it took, what each side built and lost, and
-//! buttons to play the same game again or go back to the main menu.
+//! buttons to play the same game again or go back to the main menu. During a game, Escape opens the game menu in the
+//! same place, with the game paused: Resume, Save game, Load game and Menu.
 //!
 //! Clicks are worked out with no GPU, so they are tested on their own, and the tally reads only the world's events.
 
@@ -64,9 +66,13 @@ pub enum Entry {
 }
 
 impl Entry {
-    /// Whether the engine can do it yet. Campaigns and saved games are still to come.
-    pub fn ready(self) -> bool {
-        !matches!(self, Entry::Campaign | Entry::Load)
+    /// Whether the engine can do it yet, given whether there is a saved game. Campaigns are still to come.
+    pub fn ready(self, has_save: bool) -> bool {
+        match self {
+            Entry::Campaign => false,
+            Entry::Load => has_save,
+            Entry::Skirmish | Entry::Quit => true,
+        }
     }
 
     pub fn label(self) -> &'static str {
@@ -104,6 +110,12 @@ pub enum Pressed {
     Menu,
     /// Leave the program.
     Quit,
+    /// Close the game menu and carry on.
+    Resume,
+    /// Save the game being played, over the last save.
+    Save,
+    /// Load the saved game.
+    Load,
 }
 
 /// The menus' state.
@@ -113,6 +125,8 @@ pub struct Menu {
     pub options: Options,
     /// Whether the main menu offers Quit: on the desktop, not in a browser tab.
     pub quit: bool,
+    /// Whether there is a saved game to load.
+    pub has_save: bool,
 }
 
 /// Where the game-over panel's lines start, below its headline.
@@ -209,7 +223,7 @@ pub fn title_layout(screen: Screen) -> TitleLayout {
 impl Menu {
     /// The menus, on the main menu, offering Quit when `quit`.
     pub fn new(options: Options, quit: bool) -> Menu {
-        Menu { page: Page::Main, options, quit }
+        Menu { page: Page::Main, options, quit, has_save: false }
     }
 
     /// Each row's button of the skirmish setup on a screen of this size.
@@ -233,6 +247,7 @@ impl Menu {
                     Pressed::Nothing
                 }
                 Some(Entry::Quit) => Pressed::Quit,
+                Some(Entry::Load) if self.has_save => Pressed::Load,
                 _ => Pressed::Nothing,
             };
         }
@@ -299,7 +314,7 @@ impl Menu {
         if self.page == Page::Main {
             heading(batch, main_title(screen), "A REAL-TIME STRATEGY ENGINE");
             for (entry, r) in self.entries(screen) {
-                if entry.ready() {
+                if entry.ready(self.has_save) {
                     button(batch, font, r, entry.label(), if entry == Entry::Skirmish { PICKED } else { BUTTON });
                 } else {
                     // Shown, so the menu reads like a game's, but greyed out until the engine can do it.
@@ -408,6 +423,72 @@ pub fn draw_over(
         let label = if pressed == Pressed::Again { "PLAY AGAIN" } else { "MENU" };
         button(batch, font, r, label, if pressed == Pressed::Again { PICKED } else { BUTTON });
     }
+}
+
+/// The game menu's buttons on a screen of this size, in the panel's place under its headline: resume, save, load and
+/// back to the main menu.
+pub fn game_buttons(screen: Screen) -> [(Pressed, Px); 4] {
+    let panel = layout(screen, 0).panel;
+    let w = WIDTH - 2.0 * PAD;
+    let at = |i: f32| Px::new(panel.x + PAD, TOP + PAD + i * (BUTTON_H + GAP), w, BUTTON_H);
+    [(Pressed::Resume, at(0.0)), (Pressed::Save, at(1.0)), (Pressed::Load, at(2.0)), (Pressed::Menu, at(3.0))]
+}
+
+/// A click on the game menu. Load does nothing without a saved game.
+pub fn game_click(at: (f32, f32), screen: Screen, has_save: bool) -> Pressed {
+    match game_buttons(screen).into_iter().find(|(_, r)| r.contains(at.0, at.1)).map(|(p, _)| p) {
+        Some(Pressed::Load) if !has_save => Pressed::Nothing,
+        Some(p) => p,
+        None => Pressed::Nothing,
+    }
+}
+
+/// The game menu in the panel's place, the game paused: the time, the buttons, and `notice` (what the last save or
+/// load did) under them.
+pub fn draw_game(batch: &mut SpriteBatch, font: &Font, screen: Screen, world: &World, has_save: bool, notice: &str) {
+    let panel = backdrop(batch, screen);
+    let seconds = world.tick() / TICKS_PER_SECOND as u32;
+    title(batch, font, panel, "PAUSED", &format!("AT {}:{:02}", seconds / 60, seconds % 60));
+    let buttons = game_buttons(screen);
+    for (pressed, r) in buttons {
+        let label = match pressed {
+            Pressed::Resume => "RESUME",
+            Pressed::Save => "SAVE GAME",
+            Pressed::Load => "LOAD GAME",
+            _ => "MENU",
+        };
+        if pressed == Pressed::Load && !has_save {
+            batch.fill(r, BACK);
+            batch.outline(r, 1.0, EDGE);
+            let (x, y) = (r.x + (r.w - Font::width(label, BIG)) / 2.0, r.y + (r.h - Font::height(BIG)) / 2.0);
+            font.draw(batch, label, x, y, BIG, DIM);
+        } else {
+            button(batch, font, r, label, if pressed == Pressed::Resume { PICKED } else { BUTTON });
+        }
+    }
+    let last = buttons[3].1;
+    let mut y = last.y + last.h + 2.0 * GAP;
+    for line in wrap(notice, panel.w - 2.0 * PAD) {
+        font.draw(batch, &line, panel.x + PAD, y, SMALL, INK);
+        y += Font::height(SMALL) + 4.0;
+    }
+    let help = "ESCAPE TO RESUME";
+    font.draw(batch, help, panel.x + PAD, screen.height - PAD - Font::height(SMALL), SMALL, DIM);
+}
+
+/// `text` broken into lines no wider than `width` at the small scale, at spaces.
+fn wrap(text: &str, width: f32) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(line) if Font::width(&format!("{line} {word}"), SMALL) <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
 }
 
 /// The panel's background and edge; returns where the panel is.
