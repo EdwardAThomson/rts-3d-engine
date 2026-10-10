@@ -41,7 +41,8 @@ shared with the Classic engine (a second crate in the `rts-core` repository, pin
    selects every unit of yours whose middle projects inside it. Orders go in as ordinary commands in sub-cell
    units, so nothing new reaches replays or the state hash. A selected unit gets a pale plate under it, and the
    drag box is flat rectangles drawn over the scene. A click also selects one of your structures, but a box takes
-   only mobile units, and only mobile units take move and attack orders. Right-clicking a frame of yours sends the
+   only mobile units, and only mobile units take move and attack orders. Two or more units sent to the ground go
+   in formation (`Command::Formation`), one alone just moves. Right-clicking a frame of yours sends the
    selected builders to help build it, and a wreck, to reclaim it. A double click selects every unit or structure
    of yours of that kind on screen. Right-clicking the ground with a factory selected sets its rally point
    (`Command::Rally`, docs/intent.md), drawn as a flag on a post while the factory is selected; units it finishes
@@ -129,7 +130,7 @@ cargo run --release -p render3d --bin play3d -- --seed 1 --players 2
 It opens on the main menu (rule 11); the command line's options fill it in, and `--menu 0` (`?menu=0`) skips it.
 You play the first side (blue) of the generic skirmish (`ai3d::skirmish`) against computer players. Left-click
 a unit of yours to select it or drag a box round several, with shift to add to the selection; right-click an enemy
-to attack it or the ground to move there, with Ctrl held to attack-move. Double-click a unit to select all of its
+to attack it or the ground to move there (several at once go in formation), with Ctrl held to attack-move. Double-click a unit to select all of its
 kind on screen. With a factory selected, right-click the ground to set its rally point. Ctrl and a number keep the
 selection as a control group; the number brings it back, and a second press looks at it. A computer helper (an ordinary `ai3d`
 player) runs your base and factories and sends waves with the fighters you leave to it; once you give a unit an

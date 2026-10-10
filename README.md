@@ -6,7 +6,7 @@ Engine; both build on the shared `rts-core` crate.
 
 Early days: `crates/sim3d` has fixed-point positions, heightmap terrain, line of sight, and units moving over the
 terrain by flow fields per movement class, steering round each other, and fighting with real projectiles that
-hills and units can stop, from turrets and hulls that turn at their own rates, plus a flow economy with factories, builders, structures, extractors and wrecks,
+hills and units can stop, from turrets and hulls that turn at their own rates, moving in formation, plus a flow economy with factories, builders, structures, extractors and wrecks,
 seekable replays, intent orders (patrol, factory targets, fall back) and fog of war with hills blocking sight
 (docs/vision.md). `crates/ai3d` has a computer opponent
 that scouts for what it can't see and headless self-play on a generic skirmish:

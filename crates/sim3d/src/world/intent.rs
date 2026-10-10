@@ -97,6 +97,7 @@ impl World {
             let u = &mut self.units[i];
             (u.target, u.chase, u.hunt, u.plan, u.assist, u.reclaim, u.patrol) =
                 (None, false, false, None, None, None, None);
+            (u.group, u.face) = (None, None);
             self.set_goal(i, x, y);
         }
     }

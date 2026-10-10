@@ -16,7 +16,8 @@
 //! an axis turned a little clockwise, so units meeting head on slide round each other instead of locking. A
 //! push never takes a unit off the map or onto ground its class cannot cross. A group sent to one point packs
 //! round it: a unit whose move is not over arrives when it touches a unit already resting at the same goal and
-//! is within the space such a crowd needs.
+//! is within the space such a crowd needs. A group sent in formation instead gives each member its own place
+//! (see `formation`).
 //!
 //! Armed units fight on their own: idle ones, and ones on an attack-move, look for an enemy every few ticks. A
 //! unit on an attack-move halts while it has such a target and drives on when the target is gone.
@@ -37,6 +38,7 @@ use rts_core::rng::{random_int, seed_state};
 use std::collections::BTreeMap;
 
 mod construction;
+mod formation;
 mod intent;
 
 /// An order from a player or the AI. Commands are the only input to the simulation, so the starting state, the
@@ -79,6 +81,26 @@ pub enum Command {
     /// A standing rule for a factory: every unit it finishes moves to the point, given in sub-cell units. `None`
     /// drops the rule. Ignored unless the unit is a factory of mobile units.
     Rally { unit: u32, point: Option<(i32, i32)> },
+    /// Send a group to a point in formation (see `formation`): in ranks across the way they go, arriving together
+    /// and facing that way. With `hunt` it is an attack-move. Structures and frames in the list are left out.
+    Formation { units: Vec<u32>, x: i32, y: i32, hunt: bool },
+}
+
+impl Command {
+    /// The unit whose current order this command replaces, if it gives one unit a new order.
+    fn ordered(&self) -> Option<u32> {
+        match *self {
+            Command::Move { unit, .. }
+            | Command::Stop { unit }
+            | Command::Attack { unit, .. }
+            | Command::AttackMove { unit, .. }
+            | Command::Build { unit, .. }
+            | Command::Assist { unit, .. }
+            | Command::Reclaim { unit, .. }
+            | Command::Patrol { unit, .. } => Some(unit),
+            _ => None,
+        }
+    }
 }
 
 /// Why a move ended.
@@ -215,6 +237,13 @@ pub struct Unit {
     pub facing: i32,
     /// Which way its turret points, relative to the body: 0 points ahead.
     pub aim: i32,
+    /// The formation it is moving in, while under way.
+    pub group: Option<u32>,
+    /// Which way to turn to face once it stands still, as a formation's members do on arrival.
+    pub face: Option<i32>,
+    /// In a formation, how far its place is from the formation's point: it follows the route to that point
+    /// shifted by this much, so the members keep their places on the way.
+    pub lane: Option<(i32, i32)>,
 }
 
 impl Canon for Unit {
@@ -226,20 +255,24 @@ impl Canon for Unit {
         let keep: Vec<Vec<i64>> = self.keep.iter().map(|&(k, n)| vec![k as i64, i64::from(n)]).collect();
         let fall_back = self.fall_back.map(|(p, x, y)| vec![p, x, y]);
         let rally = self.rally.map(|(x, y)| vec![x, y]);
+        let lane = self.lane.map(|(x, y)| vec![x, y]);
         w.object()
             .opt("aim", (self.aim != 0).then_some(&self.aim))
             .opt("assist", self.assist.as_ref())
             .opt("build", self.build.as_ref())
             .field("chase", &self.chase)
             .field("cooldown", &self.cooldown)
+            .opt("face", self.face.as_ref())
             .field("facing", &self.facing)
             .opt("fallBack", fall_back.as_ref())
             .opt("goal", goal.as_ref())
+            .opt("group", self.group.as_ref())
             .field("health", &self.health)
             .opt("hunt", self.hunt.then_some(&true))
             .field("id", &self.id)
             .opt("keep", (!keep.is_empty()).then_some(&keep))
             .field("kind", &(self.kind as u32))
+            .opt("lane", lane.as_ref())
             .field("owner", &self.owner)
             .opt("patrol", patrol.as_ref())
             .opt("plan", plan.as_ref())
@@ -473,6 +506,9 @@ impl World {
             rally: None,
             facing,
             aim: 0,
+            group: None,
+            face: None,
+            lane: None,
         });
         id
     }
@@ -495,24 +531,36 @@ impl World {
         let hurt = self.hurt(&mut events, damage);
         self.fall_back(hurt);
         let mut ended = Vec::new();
+        let paces = self.paces();
         for (i, unit) in self.units.iter_mut().enumerate() {
-            if let Some(goal) = unit.goal {
-                if unit.hunt && unit.target.is_some() {
-                    // Halted on an attack-move to fight an enemy in range and in sight.
-                    continue;
-                }
-                let class = &self.types[unit.kind].movement;
-                let field = &self.fields[&(unit.kind, cell_of(&self.map, goal))];
-                if let Some(reason) = advance(&self.map, class, field, unit, goal) {
-                    (unit.goal, unit.hunt) = (None, false);
-                    unit.rest = (reason == MoveEnd::Arrived).then_some(goal);
-                    if reason == MoveEnd::Unreachable {
-                        // A builder that cannot get to its site gives up on it.
-                        (unit.plan, unit.assist, unit.reclaim) = (None, None, None);
-                        unit.patrol = None;
+            let class = &self.types[unit.kind].movement;
+            let Some(goal) = unit.goal else {
+                // Standing still: turn to face the way it was told to, unless it is busy aiming at something.
+                if let Some(face) = unit.face
+                    && unit.target.is_none()
+                {
+                    unit.facing = turn_towards(unit.facing, face, class.turn);
+                    if unit.facing == face {
+                        unit.face = None;
                     }
-                    ended.push((i, reason));
                 }
+                continue;
+            };
+            if unit.hunt && unit.target.is_some() {
+                // Halted on an attack-move to fight an enemy in range and in sight.
+                continue;
+            }
+            let (lx, ly) = unit.lane.unwrap_or((0, 0));
+            let field = &self.fields[&(unit.kind, cell_of(&self.map, (goal.0 - lx, goal.1 - ly)))];
+            if let Some(reason) = advance(&self.map, class, paces[i], field, unit, goal) {
+                (unit.goal, unit.hunt, unit.lane) = (None, false, None);
+                unit.rest = (reason == MoveEnd::Arrived).then_some(goal);
+                if reason == MoveEnd::Unreachable {
+                    // A builder that cannot get to its site gives up on it.
+                    (unit.plan, unit.assist, unit.reclaim) = (None, None, None);
+                    unit.patrol = None;
+                }
+                ended.push((i, reason));
             }
         }
         self.separate();
@@ -544,7 +592,7 @@ impl World {
         let (map, blocked, types) = (&self.map, &self.blocked, &self.types);
         self.fields.entry((kind, cell)).or_insert_with(|| FlowField::build(map, blocked, &types[kind].movement, cell));
         self.units[i].goal = Some(goal);
-        self.units[i].rest = None;
+        (self.units[i].rest, self.units[i].lane) = (None, None);
     }
 
     /// Every unit attacking something, in id order, reloads, then fires if it can or closes in if it cannot.
@@ -1165,7 +1213,11 @@ impl World {
     }
 
     fn apply(&mut self, command: Command) {
+        if let Some(i) = command.ordered().and_then(|id| self.index_of(id)) {
+            (self.units[i].group, self.units[i].face) = (None, None);
+        }
         match command {
+            Command::Formation { units, x, y, hunt } => self.order_formation(&units, x, y, hunt),
             Command::Move { unit, x, y } => {
                 let Some(i) = self.index_of(unit) else { return };
                 let u = &mut self.units[i];
@@ -1335,10 +1387,40 @@ fn centre((cx, cy): (i32, i32)) -> (i32, i32) {
     (cx * SUB + SUB / 2, cy * SUB + SUB / 2)
 }
 
+/// Where a mover at `here` heads next on its way to `goal`, or `None` where `field` can't get it there. A mover
+/// in a formation follows the route to the formation's point (`field`'s goal) shifted by its `lane`, as long as the
+/// shifted waypoint is on the map and on ground the route could use; otherwise it follows the route itself.
+fn waypoint(
+    map: &Heightmap,
+    field: &FlowField,
+    here: (i32, i32),
+    goal: (i32, i32),
+    lane: Option<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    if let Some((lx, ly)) = lane {
+        let cell = route_cell(map, field, (here.0 - lx, here.1 - ly));
+        if cell == field.goal() {
+            return Some(goal);
+        }
+        let (x, y) = centre(field.next(cell)?);
+        let shifted = (x + lx, y + ly);
+        let inside = |v: i32, cells: i32| 0 < v && v < cells * SUB;
+        if inside(shifted.0, map.width())
+            && inside(shifted.1, map.height())
+            && field.cost(cell_of(map, shifted)).is_some()
+        {
+            return Some(shifted);
+        }
+    }
+    let cell = route_cell(map, field, here);
+    if cell == field.goal() { Some(goal) } else { field.next(cell).map(centre) }
+}
+
 /// Move one unit for one tick. Returns how its move ended, if it did.
 fn advance(
     map: &Heightmap,
     class: &MoveClass,
+    pace: i32,
     field: &FlowField,
     unit: &mut Unit,
     goal: (i32, i32),
@@ -1346,8 +1428,7 @@ fn advance(
     // Face the way to the next waypoint first; a unit facing too far off it turns where it stands this tick.
     let here = (unit.pos.x, unit.pos.y);
     if here != goal {
-        let cell = route_cell(map, field, here);
-        let next = if cell == field.goal() { Some(goal) } else { field.next(cell).map(centre) };
+        let next = waypoint(map, field, here, goal, unit.lane);
         if let Some(want) = next.and_then(|(x, y)| bearing(x - here.0, y - here.1)) {
             unit.facing = turn_towards(unit.facing, want, class.turn);
             if angle_diff(unit.facing, want).abs() > DRIVE_ARC {
@@ -1356,7 +1437,7 @@ fn advance(
             }
         }
     }
-    let mut budget = class.speed;
+    let mut budget = class.speed.min(pace);
     let mut first = true;
     let mut ended = None;
     // A unit passes at most a few waypoints a tick; the cap only guards against a speed above a cell a tick.
@@ -1366,17 +1447,9 @@ fn advance(
             ended = Some(MoveEnd::Arrived);
             break;
         }
-        let cell = route_cell(map, field, here);
-        let target = if cell == field.goal() {
-            goal
-        } else {
-            match field.next(cell) {
-                Some(next) => centre(next),
-                None => {
-                    ended = Some(MoveEnd::Unreachable);
-                    break;
-                }
-            }
+        let Some(target) = waypoint(map, field, here, goal, unit.lane) else {
+            ended = Some(MoveEnd::Unreachable);
+            break;
         };
         if budget == 0 {
             break;
